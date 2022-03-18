@@ -5,10 +5,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use slog::{error, info, o, Drain};
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// A pseudo iterator used to know which middleware should be called next.
+/// This is created by the Chain type.
 #[derive(Clone)]
 struct ChainIter {
     stack: Arc<RwLock<Vec<Box<dyn ServerMiddleware + Send + Sync>>>>,
@@ -33,7 +34,7 @@ impl ChainIter {
                     },
                     job.clone(),
                     worker.clone(),
-                    None,
+                    redis,
                 )
                 .await?;
         }
@@ -42,6 +43,7 @@ impl ChainIter {
     }
 }
 
+/// A chain of middlewares that will be called in order by different server middlewares.
 struct Chain {
     stack: Arc<RwLock<Vec<Box<dyn ServerMiddleware + Send + Sync>>>>,
 }
@@ -62,7 +64,6 @@ impl Chain {
         &mut self,
         job: Job,
         worker: Box<dyn Worker>,
-        // handler: impl Future<Output = MiddlewareResult> + Send + 'static,
         redis: Option<redis::aio::Connection>,
     ) -> ServerResult {
         // The middleware must call bottom of the stack to the top.
@@ -79,7 +80,6 @@ impl Chain {
     }
 }
 
-type MiddlewareResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 type ServerResult = Result<(), Box<dyn std::error::Error>>;
 
 #[async_trait]
@@ -90,7 +90,6 @@ trait ServerMiddleware {
         _job: Job,
         _worker: Box<dyn Worker>,
         redis: Option<redis::aio::Connection>,
-        // next: impl Future<Output = MiddlewareResult> + Send + 'static,
     ) -> ServerResult;
 }
 
@@ -100,10 +99,10 @@ struct HandlerMiddleware;
 impl ServerMiddleware for HandlerMiddleware {
     async fn call(
         &self,
-        mut chain: ChainIter,
+        _chain: ChainIter,
         job: Job,
         worker: Box<dyn Worker>,
-        redis: Option<redis::aio::Connection>,
+        _redis: Option<redis::aio::Connection>,
     ) -> ServerResult {
         println!("BEFORE Calling worker...");
         let r = worker.perform(job.args).await;
@@ -118,11 +117,10 @@ struct RetryMiddleware;
 impl ServerMiddleware for RetryMiddleware {
     async fn call(
         &self,
-        mut chain: ChainIter,
+        chain: ChainIter,
         job: Job,
         worker: Box<dyn Worker>,
         redis: Option<redis::aio::Connection>,
-        //next: impl Future<Output = MiddlewareResult> + Send + 'static,
     ) -> ServerResult {
         println!("BEFORE: retry middleware");
         if chain.next(job.clone(), worker, None).await.is_err() {
