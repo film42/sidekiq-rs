@@ -1,6 +1,6 @@
 use async_trait::async_trait;
+use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use dyn_clone::DynClone;
-use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use slog::{error, info, o, Drain};
@@ -21,7 +21,7 @@ impl ChainIter {
         &self,
         job: Job,
         worker: Box<dyn Worker>,
-        redis: Option<redis::aio::Connection>,
+        redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         let stack = self.stack.read().await;
 
@@ -64,7 +64,7 @@ impl Chain {
         &mut self,
         job: Job,
         worker: Box<dyn Worker>,
-        redis: Option<redis::aio::Connection>,
+        redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         // The middleware must call bottom of the stack to the top.
         // Each middleware should receive a lambda to the next middleware
@@ -86,10 +86,10 @@ type ServerResult = Result<(), Box<dyn std::error::Error>>;
 trait ServerMiddleware {
     async fn call(
         &self,
-        _iter: ChainIter,
-        _job: Job,
-        _worker: Box<dyn Worker>,
-        redis: Option<redis::aio::Connection>,
+        iter: ChainIter,
+        job: Job,
+        worker: Box<dyn Worker>,
+        redis: Pool<RedisConnectionManager>,
     ) -> ServerResult;
 }
 
@@ -102,7 +102,7 @@ impl ServerMiddleware for HandlerMiddleware {
         _chain: ChainIter,
         job: Job,
         worker: Box<dyn Worker>,
-        _redis: Option<redis::aio::Connection>,
+        _redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         println!("BEFORE Calling worker...");
         let r = worker.perform(job.args).await;
@@ -120,18 +120,20 @@ impl ServerMiddleware for RetryMiddleware {
         chain: ChainIter,
         job: Job,
         worker: Box<dyn Worker>,
-        redis: Option<redis::aio::Connection>,
+        mut redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         println!("BEFORE: retry middleware");
-        if chain.next(job.clone(), worker, None).await.is_err() {
-            if let Some(mut redis) = redis {
-                UnitOfWork {
-                    job: job.clone(),
-                    queue: format!("queue:{}", &job.queue),
-                }
-                .reenqueue(&mut redis)
-                .await?;
+        if chain
+            .next(job.clone(), worker, redis.clone())
+            .await
+            .is_err()
+        {
+            UnitOfWork {
+                job: job.clone(),
+                queue: format!("queue:{}", &job.queue),
             }
+            .reenqueue(&mut redis)
+            .await?;
         }
         println!("AFTER: retry middleware");
         Ok(())
@@ -179,9 +181,11 @@ struct UnitOfWork {
 impl UnitOfWork {
     pub async fn reenqueue(
         &self,
-        client: &mut redis::aio::Connection,
+        redis: &mut Pool<RedisConnectionManager>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        client
+        redis
+            .get()
+            .await?
             .rpush(&self.queue, serde_json::to_string(&self.job)?)
             .await?;
 
@@ -190,7 +194,7 @@ impl UnitOfWork {
 }
 
 struct Processor {
-    redis: redis::aio::Connection,
+    redis: Pool<RedisConnectionManager>,
     queues: Vec<String>,
     workers: BTreeMap<String, Box<dyn Worker>>,
     logger: slog::Logger,
@@ -199,7 +203,8 @@ struct Processor {
 
 impl Processor {
     pub async fn fetch(&mut self) -> Result<UnitOfWork, Box<dyn std::error::Error>> {
-        let (queue, job_raw): (String, String) = self.redis.brpop(&self.queues, 0).await?;
+        let (queue, job_raw): (String, String) =
+            self.redis.get().await?.brpop(&self.queues, 0).await?;
         let job: Job = serde_json::from_str(&job_raw)?;
         // println!("{:?}", (&queue, &args));
         Ok(UnitOfWork { queue, job })
@@ -223,7 +228,7 @@ impl Processor {
                     worker.clone(),
                     // async move { handler.call(work.job.clone(), worker.clone()).await },
                     // &mut self.redis,
-                    None,
+                    self.redis.clone(),
                 )
                 .await?;
 
@@ -273,13 +278,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let drain = slog_term::FullFormat::new(decorator).build().fuse();
     let logger = slog::Logger::root(drain, o!());
 
-    let client = redis::Client::open("redis://127.0.0.1/")?;
-    let con = client.get_tokio_connection().await?;
     // let res = con.brpop("some:queue", 1).await?;
     // println!("Hello, world! {:?}", res);
 
+    let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
+    let redis = Pool::builder().build(manager).await.unwrap();
+
     let mut p = Processor {
-        redis: con,
+        redis,
         queues: vec!["queue:yolo".to_string()],
         workers: BTreeMap::new(),
         logger,
