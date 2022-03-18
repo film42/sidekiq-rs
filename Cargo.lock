@@ -573,6 +573,7 @@ dependencies = [
  "bb8-redis",
  "dyn-clone",
  "futures",
+ "num_cpus",
  "redis",
  "serde",
  "serde_json",

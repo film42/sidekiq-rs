@@ -44,6 +44,7 @@ impl ChainIter {
 }
 
 /// A chain of middlewares that will be called in order by different server middlewares.
+#[derive(Clone)]
 struct Chain {
     stack: Arc<RwLock<Vec<Box<dyn ServerMiddleware + Send + Sync>>>>,
 }
@@ -193,6 +194,7 @@ impl UnitOfWork {
     }
 }
 
+#[derive(Clone)]
 struct Processor {
     redis: Pool<RedisConnectionManager>,
     queues: Vec<String>,
@@ -299,8 +301,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     p.register("HelloWorker", Box::new(HelloWorker));
     p.register("YoloWorker", Box::new(YoloWorker));
 
+    let cpu_count = num_cpus::get();
+    for _ in 0..cpu_count {
+        tokio::spawn({
+            let mut processor = p.clone();
+
+            async move {
+                loop {
+                    if let Err(err) = processor.process_one().await {
+                        error!(processor.logger, "Error leaked out the bottom: {:?}", err);
+                    }
+                }
+            }
+        });
+    }
+
     loop {
-        p.process_one().await?;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await
     }
 }
 
