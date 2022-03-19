@@ -50,10 +50,10 @@ struct Chain {
 }
 
 impl Chain {
-    fn new() -> Self {
+    fn new(logger: slog::Logger) -> Self {
         Self {
             stack: Arc::new(RwLock::new(vec![
-                Box::new(RetryMiddleware),
+                Box::new(RetryMiddleware::new(logger)),
                 Box::new(HandlerMiddleware),
             ])),
         }
@@ -118,7 +118,15 @@ impl ServerMiddleware for HandlerMiddleware {
     }
 }
 
-struct RetryMiddleware;
+struct RetryMiddleware {
+    logger: slog::Logger,
+}
+
+impl RetryMiddleware {
+    fn new(logger: slog::Logger) -> Self {
+        Self { logger }
+    }
+}
 
 #[async_trait]
 impl ServerMiddleware for RetryMiddleware {
@@ -130,18 +138,28 @@ impl ServerMiddleware for RetryMiddleware {
         mut redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         println!("BEFORE: retry middleware");
-        if chain
-            .next(job.clone(), worker, redis.clone())
-            .await
-            .is_err()
-        {
-            UnitOfWork {
-                job: job.clone(),
-                queue: format!("queue:{}", &job.queue),
+        let err = {
+            match chain.next(job.clone(), worker, redis.clone()).await {
+                Ok(()) => return Ok(()),
+                Err(err) => format!("{err:?}"),
             }
-            .reenqueue(&mut redis)
-            .await?;
+        };
+
+        error!(self.logger,
+            "Scheduling job for retry in the future";
+            "status" => "fail",
+            "class" => &job.class,
+            "jid" => &job.jid,
+            "queue" => &job.queue,
+            "err" => err,
+        );
+
+        UnitOfWork {
+            job: job.clone(),
+            queue: format!("queue:{}", &job.queue),
         }
+        .reenqueue(&mut redis)
+        .await?;
         println!("AFTER: retry middleware");
         Ok(())
     }
@@ -216,11 +234,12 @@ impl Processor {
         queues: Vec<String>,
     ) -> Self {
         Self {
+            chain: Chain::new(logger.clone()),
+            workers: BTreeMap::new(),
+
             redis,
             logger,
             queues: queues,
-            workers: BTreeMap::new(),
-            chain: Chain::new(),
         }
     }
 

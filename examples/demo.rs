@@ -87,9 +87,11 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
         worker: Box<dyn Worker>,
         mut redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
-        let args: Option<(FiltereExpiredUsersArgs,)> = serde_json::from_value(job.args.clone())?;
+        let args: Result<(FiltereExpiredUsersArgs,), serde_json::Error> =
+            serde_json::from_value(job.args.clone());
 
-        if let Some((filter,)) = args {
+        // If we can safely deserialize then attempt to filter based on user guid.
+        if let Ok((filter,)) = args {
             if filter.is_expired() {
                 error!(
                     self.logger,
