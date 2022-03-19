@@ -61,6 +61,13 @@ impl Chain {
         stack.push(middleware);
     }
 
+    fn iter(&self) -> ChainIter {
+        ChainIter {
+            stack: self.stack.clone(),
+            index: 0,
+        }
+    }
+
     async fn call(
         &mut self,
         job: Job,
@@ -71,13 +78,7 @@ impl Chain {
         // Each middleware should receive a lambda to the next middleware
         // up the stack. Each middleware can short-circuit the stack by
         // not calling the "next" middleware.
-
-        ChainIter {
-            stack: self.stack.clone(),
-            index: 0,
-        }
-        .next(job, worker, redis)
-        .await
+        self.iter().next(job, worker, redis).await
     }
 }
 
@@ -233,23 +234,7 @@ impl Processor {
                     self.redis.clone(),
                 )
                 .await?;
-
-        //             // let mut args: Vec<JsonValue> = serde_json::from_value(work.job.args)?;
-        //             // How do we control this variadic argument problem? If it's an array with one object we
-        //             // can do this, but if not we'll likely need the caller to specify a tuple type.
-        //             // let args = args.pop().unwrap();
-        //             if let Err(err) = worker.perform(work.job.args.clone()).await {
-        //                 error!(self.logger, "sidekiq";
-        //                     "staus" => "fail",
-        //                     "class" => &work.job.class,
-        //                     "jid" => &work.job.jid,
-        //                     "reason" => format!("{err:?}")
-        //                 );
-        //                 work.reenqueue(&mut self.redis).await?;
-        //                 return Err(err);
-        //             }
         } else {
-            // Handle missing worker.
             error!(
                 self.logger,
                 "!!! Worker not found !!!";
