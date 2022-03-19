@@ -3,7 +3,7 @@ use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use dyn_clone::DynClone;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use slog::{error, info, o, Drain};
+use slog::{error, info};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -52,7 +52,10 @@ struct Chain {
 impl Chain {
     fn new() -> Self {
         Self {
-            stack: Arc::new(RwLock::new(vec![])),
+            stack: Arc::new(RwLock::new(vec![
+                Box::new(RetryMiddleware),
+                Box::new(HandlerMiddleware),
+            ])),
         }
     }
 
@@ -143,7 +146,7 @@ impl ServerMiddleware for RetryMiddleware {
 }
 
 #[async_trait]
-trait Worker: Send + Sync + DynClone {
+pub trait Worker: Send + Sync + DynClone {
     async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>>;
 }
 dyn_clone::clone_trait_object!(Worker);
@@ -196,7 +199,7 @@ impl UnitOfWork {
 }
 
 #[derive(Clone)]
-struct Processor {
+pub struct Processor {
     redis: Pool<RedisConnectionManager>,
     queues: Vec<String>,
     workers: BTreeMap<String, Box<dyn Worker>>,
@@ -205,7 +208,21 @@ struct Processor {
 }
 
 impl Processor {
-    pub async fn fetch(&mut self) -> Result<UnitOfWork, Box<dyn std::error::Error>> {
+    pub fn new(
+        redis: Pool<RedisConnectionManager>,
+        logger: slog::Logger,
+        queues: Vec<String>,
+    ) -> Self {
+        Self {
+            redis,
+            logger,
+            queues: queues,
+            workers: BTreeMap::new(),
+            chain: Chain::new(),
+        }
+    }
+
+    async fn fetch(&mut self) -> Result<UnitOfWork, Box<dyn std::error::Error>> {
         let (queue, job_raw): (String, String) =
             self.redis.get().await?.brpop(&self.queues, 0).await?;
         let job: Job = serde_json::from_str(&job_raw)?;
@@ -257,82 +274,28 @@ impl Processor {
     pub fn register<S: Into<String>>(&mut self, name: S, worker: Box<dyn Worker>) {
         self.workers.insert(name.into(), worker);
     }
-}
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let decorator = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let logger = slog::Logger::root(drain, o!());
+    /// Takes self to consume the processor. This is for life-cycle management, not
+    /// memory safety because you can clone processor pretty easily.
+    pub async fn run(self) {
+        let cpu_count = num_cpus::get();
+        for _ in 0..cpu_count {
+            tokio::spawn({
+                let mut processor = self.clone();
+                let logger = self.logger.clone();
 
-    // let res = con.brpop("some:queue", 1).await?;
-    // println!("Hello, world! {:?}", res);
-
-    let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
-    let redis = Pool::builder().build(manager).await.unwrap();
-
-    let mut p = Processor {
-        redis,
-        queues: vec!["queue:yolo".to_string()],
-        workers: BTreeMap::new(),
-        logger,
-        chain: Chain::new(),
-    };
-
-    p.chain.using(Box::new(RetryMiddleware)).await;
-    p.chain.using(Box::new(HandlerMiddleware)).await;
-
-    // Add known workers
-    p.register("HelloWorker", Box::new(HelloWorker));
-    p.register("YoloWorker", Box::new(YoloWorker));
-
-    let cpu_count = num_cpus::get();
-    for _ in 0..cpu_count {
-        tokio::spawn({
-            let mut processor = p.clone();
-
-            async move {
-                loop {
-                    if let Err(err) = processor.process_one().await {
-                        error!(processor.logger, "Error leaked out the bottom: {:?}", err);
+                async move {
+                    loop {
+                        if let Err(err) = processor.process_one().await {
+                            error!(logger, "Error leaked out the bottom: {:?}", err);
+                        }
                     }
                 }
-            }
-        });
-    }
+            });
+        }
 
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await
-    }
-}
-
-#[derive(Clone)]
-struct HelloWorker;
-
-#[async_trait]
-impl Worker for HelloWorker {
-    async fn perform(&self, _args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Hello, I'm worker!");
-
-        Ok(())
-    }
-}
-
-#[derive(Clone)]
-struct YoloWorker;
-
-#[derive(Deserialize, Debug)]
-struct YoloArgs {
-    yolo: String,
-}
-
-#[async_trait]
-impl Worker for YoloWorker {
-    async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
-        let (args,): (YoloArgs,) = serde_json::from_value(args)?;
-
-        println!("YOLO: {}", &args.yolo);
-
-        Ok(())
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await
+        }
     }
 }
