@@ -11,13 +11,13 @@ use tokio::sync::RwLock;
 /// A pseudo iterator used to know which middleware should be called next.
 /// This is created by the Chain type.
 #[derive(Clone)]
-struct ChainIter {
+pub struct ChainIter {
     stack: Arc<RwLock<Vec<Box<dyn ServerMiddleware + Send + Sync>>>>,
     index: usize,
 }
 
 impl ChainIter {
-    async fn next(
+    pub async fn next(
         &self,
         job: Job,
         worker: Box<dyn Worker>,
@@ -61,7 +61,9 @@ impl Chain {
 
     async fn using(&mut self, middleware: Box<dyn ServerMiddleware + Send + Sync>) {
         let mut stack = self.stack.write().await;
-        stack.push(middleware);
+        // HACK: Insert after retry middleware but before the handler middleware.
+        let index = stack.len() - 1;
+        stack.insert(index, middleware);
     }
 
     fn iter(&self) -> ChainIter {
@@ -85,10 +87,10 @@ impl Chain {
     }
 }
 
-type ServerResult = Result<(), Box<dyn std::error::Error>>;
+pub type ServerResult = Result<(), Box<dyn std::error::Error>>;
 
 #[async_trait]
-trait ServerMiddleware {
+pub trait ServerMiddleware {
     async fn call(
         &self,
         iter: ChainIter,
@@ -167,18 +169,18 @@ dyn_clone::clone_trait_object!(Worker);
 // }
 //
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct Job {
-    queue: String,
-    args: JsonValue,
-    retry: bool,
-    class: String,
-    jid: String,
-    created_at: f64,
-    enqueued_at: f64,
+pub struct Job {
+    pub queue: String,
+    pub args: JsonValue,
+    pub retry: bool,
+    pub class: String,
+    pub jid: String,
+    pub created_at: f64,
+    pub enqueued_at: f64,
 }
 
 #[derive(Debug)]
-struct UnitOfWork {
+pub struct UnitOfWork {
     queue: String,
     job: Job,
 }
@@ -297,5 +299,9 @@ impl Processor {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await
         }
+    }
+
+    pub async fn using(&mut self, middleware: Box<dyn ServerMiddleware + Send + Sync>) {
+        self.chain.using(middleware).await
     }
 }
