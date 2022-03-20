@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // Enqueue a job with options
-    sidekiq::set()
+    sidekiq::opt()
         .queue("yolo".to_string())
         .perform_async(
             &mut redis,

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub fn set() -> EnqueueOpts {
+pub fn opt() -> EnqueueOpts {
     EnqueueOpts {
         queue: "default".into(),
     }
