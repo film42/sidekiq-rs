@@ -6,15 +6,7 @@ use sidekiq::{ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker}
 use slog::{error, info, o, Drain};
 
 #[derive(Clone)]
-struct HelloWorker {
-    logger: slog::Logger,
-}
-
-impl HelloWorker {
-    fn new(logger: slog::Logger) -> Self {
-        Self { logger }
-    }
-}
+struct HelloWorker;
 
 #[async_trait]
 impl Worker for HelloWorker {
@@ -53,7 +45,8 @@ impl Worker for PaymentReportWorker {
         // I use serde to pull out my args as a type. I fail if the value cannot be decoded.
         // NOTE: I use a size-one (tuple,) tuple because args are a JsonArray.
         let (args,): (PaymentReportArgs,) = serde_json::from_value(args)?;
-        Ok(())
+
+        self.send_report(args.user_guid).await
     }
 }
 
@@ -123,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut p = Processor::new(redis, logger.clone(), vec!["queue:yolo".to_string()]);
 
     // Add known workers
-    p.register("HelloWorker", Box::new(HelloWorker::new(logger.clone())));
+    p.register("HelloWorker", Box::new(HelloWorker));
     p.register(
         "PaymentReportWorker",
         Box::new(PaymentReportWorker::new(logger.clone())),
