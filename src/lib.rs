@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use dyn_clone::DynClone;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use slog::{error, info};
@@ -126,6 +127,11 @@ impl RetryMiddleware {
     fn new(logger: slog::Logger) -> Self {
         Self { logger }
     }
+
+    fn max_retries(&self) -> usize {
+        // TODO: Make configurable at the worker level
+        25
+    }
 }
 
 #[async_trait]
@@ -133,7 +139,7 @@ impl ServerMiddleware for RetryMiddleware {
     async fn call(
         &self,
         chain: ChainIter,
-        job: Job,
+        mut job: Job,
         worker: Box<dyn Worker>,
         mut redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
@@ -145,21 +151,34 @@ impl ServerMiddleware for RetryMiddleware {
             }
         };
 
-        error!(self.logger,
-            "Scheduling job for retry in the future";
-            "status" => "fail",
-            "class" => &job.class,
-            "jid" => &job.jid,
-            "queue" => &job.queue,
-            "err" => err,
-        );
-
-        UnitOfWork {
-            job: job.clone(),
-            queue: format!("queue:{}", &job.queue),
+        // Update error fields on the job.
+        job.error_message = Some(err);
+        if job.retry_count.is_some() {
+            job.retried_at = Some(chrono::Utc::now().timestamp() as f64);
+        } else {
+            job.failed_at = Some(chrono::Utc::now().timestamp() as f64);
         }
-        .reenqueue(&mut redis)
-        .await?;
+        let retry_count = job.retry_count.unwrap_or(0) + 1;
+        job.retry_count = Some(retry_count);
+
+        // Attempt the retry.
+        if retry_count < self.max_retries() {
+            error!(self.logger,
+                "Scheduling job for retry in the future";
+                "status" => "fail",
+                "class" => &job.class,
+                "jid" => &job.jid,
+                "queue" => &job.queue,
+                "err" => &job.error_message,
+            );
+
+            UnitOfWork {
+                job: job.clone(),
+                queue: format!("queue:{}", &job.queue),
+            }
+            .reenqueue(&mut redis)
+            .await?;
+        }
         println!("AFTER: retry middleware");
         Ok(())
     }
@@ -195,6 +214,10 @@ pub struct Job {
     pub jid: String,
     pub created_at: f64,
     pub enqueued_at: f64,
+    pub failed_at: Option<f64>,
+    pub error_message: Option<String>,
+    pub retry_count: Option<usize>,
+    pub retried_at: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -205,16 +228,29 @@ pub struct UnitOfWork {
 
 impl UnitOfWork {
     pub async fn reenqueue(
-        &self,
+        &mut self,
         redis: &mut Pool<RedisConnectionManager>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        redis
-            .get()
-            .await?
-            .rpush(&self.queue, serde_json::to_string(&self.job)?)
-            .await?;
+        if let Some(retry_count) = self.job.retry_count {
+            redis
+                .get()
+                .await?
+                .zadd(
+                    "retry",
+                    serde_json::to_string(&self.job)?,
+                    Self::retry_job_at(retry_count).timestamp(),
+                )
+                .await?;
+        }
 
         Ok(())
+    }
+
+    fn retry_job_at(count: usize) -> chrono::DateTime<chrono::Utc> {
+        let seconds_to_delay =
+            count.pow(4) + 15 + (rand::thread_rng().gen_range(0..30) * (count + 1));
+
+        chrono::Utc::now() + chrono::Duration::seconds(seconds_to_delay as i64)
     }
 }
 
@@ -252,7 +288,7 @@ impl Processor {
     }
 
     pub async fn process_one(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let work = self.fetch().await?;
+        let mut work = self.fetch().await?;
 
         info!(self.logger, "sidekiq";
             "status" => "start",
