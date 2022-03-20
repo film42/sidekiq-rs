@@ -4,7 +4,7 @@ use dyn_clone::DynClone;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use slog::{error, info};
+use slog::{debug, error, info};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -434,6 +434,12 @@ impl Scheduled {
             for job in jobs {
                 if redis.zrem(&sorted_set, job.clone()).await? {
                     let work = UnitOfWork::from_job_string(job)?;
+
+                    debug!(self.logger, "Enqueueing job";
+                        "class" => &work.job.class,
+                        "queue" => &work.queue
+                    );
+
                     work.enqueue_direct(&mut redis).await?;
                 }
             }
