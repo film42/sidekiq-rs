@@ -172,12 +172,9 @@ impl ServerMiddleware for RetryMiddleware {
                 "err" => &job.error_message,
             );
 
-            UnitOfWork {
-                job: job.clone(),
-                queue: format!("queue:{}", &job.queue),
-            }
-            .reenqueue(&mut redis)
-            .await?;
+            UnitOfWork::from_job(job.clone())
+                .reenqueue(&mut redis)
+                .await?;
         }
         println!("AFTER: retry middleware");
         Ok(())
@@ -227,6 +224,36 @@ pub struct UnitOfWork {
 }
 
 impl UnitOfWork {
+    pub fn from_job(job: Job) -> Self {
+        UnitOfWork {
+            queue: format!("queue:{}", &job.queue),
+            job,
+        }
+    }
+
+    pub fn from_job_string(job_str: String) -> Result<Self, Box<dyn std::error::Error>> {
+        let job: Job = serde_json::from_str(&job_str)?;
+        Ok(Self::from_job(job))
+    }
+
+    pub async fn enqueue(
+        &self,
+        redis: &mut Pool<RedisConnectionManager>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut redis = redis.get().await?;
+        self.enqueue_direct(&mut redis).await
+    }
+
+    async fn enqueue_direct(
+        &self,
+        redis: &mut redis::aio::Connection,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        redis
+            .rpush(&self.queue, serde_json::to_string(&self.job)?)
+            .await?;
+        Ok(())
+    }
+
     pub async fn reenqueue(
         &mut self,
         redis: &mut Pool<RedisConnectionManager>,
@@ -336,6 +363,8 @@ impl Processor {
     /// memory safety because you can clone processor pretty easily.
     pub async fn run(self) {
         let cpu_count = num_cpus::get();
+
+        // Start worker routines.
         for _ in 0..cpu_count {
             tokio::spawn({
                 let mut processor = self.clone();
@@ -351,6 +380,25 @@ impl Processor {
             });
         }
 
+        // Start retry and scheduled routines.
+        tokio::spawn({
+            let logger = self.logger.clone();
+            let redis = self.redis.clone();
+            async move {
+                let sched = Scheduled::new(redis, logger.clone());
+                let sorted_sets = vec!["retry".to_string(), "schedule".to_string()];
+
+                loop {
+                    // TODO: Use process count to meet a 5 second avg.
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                    if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await {
+                        error!(logger, "Error in scheduled poller routine: {:?}", err);
+                    }
+                }
+            }
+        });
+
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await
         }
@@ -358,5 +406,39 @@ impl Processor {
 
     pub async fn using(&mut self, middleware: Box<dyn ServerMiddleware + Send + Sync>) {
         self.chain.using(middleware).await
+    }
+}
+
+pub struct Scheduled {
+    redis: Pool<RedisConnectionManager>,
+    logger: slog::Logger,
+}
+
+impl Scheduled {
+    fn new(redis: Pool<RedisConnectionManager>, logger: slog::Logger) -> Self {
+        Self { redis, logger }
+    }
+
+    async fn enqueue_jobs(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        sorted_sets: &Vec<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for sorted_set in sorted_sets {
+            let mut redis = self.redis.get().await?;
+
+            let jobs: Vec<String> = redis
+                .zrangebyscore_limit(&sorted_set, "-inf", now.timestamp(), 0, 100)
+                .await?;
+
+            for job in jobs {
+                if redis.zrem(&sorted_set, job.clone()).await? {
+                    let work = UnitOfWork::from_job_string(job)?;
+                    work.enqueue_direct(&mut redis).await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
