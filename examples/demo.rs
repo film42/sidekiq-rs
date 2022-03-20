@@ -28,7 +28,7 @@ impl PaymentReportWorker {
 
     async fn send_report(&self, user_guid: String) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: Some actual work goes here...
-        info!(self.logger, "Sending payment report to user"; "user_guid" => user_guid);
+        info!(self.logger, "Sending payment report to user"; "user_guid" => user_guid, "class_name" => self.class_name());
 
         Ok(())
     }
@@ -122,6 +122,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )
     .await?;
+
+    // Enqueue a job with options
+    sidekiq::set()
+        .queue("yolo".to_string())
+        .perform_async(
+            &mut redis,
+            "PaymentReportWorker".into(),
+            PaymentReportArgs {
+                user_guid: "USR-123".to_string(),
+            },
+        )
+        .await?;
 
     // Sidekiq server
     let mut p = Processor::new(redis, logger.clone(), vec!["queue:yolo".to_string()]);

@@ -9,6 +9,31 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+pub fn set() -> EnqueueOpts {
+    EnqueueOpts {
+        queue: "default".into(),
+    }
+}
+
+pub struct EnqueueOpts {
+    queue: String,
+}
+
+impl EnqueueOpts {
+    pub fn queue(self, queue: String) -> Self {
+        EnqueueOpts { queue }
+    }
+
+    pub async fn perform_async(
+        self,
+        redis: &mut Pool<RedisConnectionManager>,
+        class: String,
+        args: impl serde::Serialize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(perform_async(redis, class, self.queue, args).await?)
+    }
+}
+
 /// Helper function for enqueueing a worker into sidekiq.
 /// This can be used to enqueue a job for a ruby sidekiq worker to process.
 pub async fn perform_async(
@@ -48,7 +73,7 @@ pub async fn perform_async(
 }
 
 fn new_jid() -> String {
-    let mut bytes = [0u8; 16];
+    let mut bytes = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut bytes);
     hex::encode(bytes)
 }
@@ -224,6 +249,14 @@ impl ServerMiddleware for RetryMiddleware {
 #[async_trait]
 pub trait Worker: Send + Sync + DynClone {
     async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>>;
+
+    fn class_name(&self) -> String {
+        use heck::ToUpperCamelCase;
+
+        std::any::type_name::<Self>()
+            .to_string()
+            .to_upper_camel_case()
+    }
 }
 dyn_clone::clone_trait_object!(Worker);
 
