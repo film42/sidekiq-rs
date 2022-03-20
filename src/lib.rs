@@ -112,10 +112,7 @@ impl ServerMiddleware for HandlerMiddleware {
         worker: Box<dyn Worker>,
         _redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
-        println!("BEFORE Calling worker...");
-        let r = worker.perform(job.args).await;
-        println!("AFTER Calling worker...");
-        r
+        worker.perform(job.args).await
     }
 }
 
@@ -143,7 +140,6 @@ impl ServerMiddleware for RetryMiddleware {
         worker: Box<dyn Worker>,
         mut redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
-        println!("BEFORE: retry middleware");
         let err = {
             match chain.next(job.clone(), worker, redis.clone()).await {
                 Ok(()) => return Ok(()),
@@ -176,7 +172,7 @@ impl ServerMiddleware for RetryMiddleware {
                 .reenqueue(&mut redis)
                 .await?;
         }
-        println!("AFTER: retry middleware");
+
         Ok(())
     }
 }
@@ -324,16 +320,8 @@ impl Processor {
         );
 
         if let Some(worker) = self.workers.get_mut(&work.job.class) {
-            // not reached, testing...
-
             self.chain
-                .call(
-                    work.job.clone(),
-                    worker.clone(),
-                    // async move { handler.call(work.job.clone(), worker.clone()).await },
-                    // &mut self.redis,
-                    self.redis.clone(),
-                )
+                .call(work.job.clone(), worker.clone(), self.redis.clone())
                 .await?;
         } else {
             error!(
@@ -346,6 +334,9 @@ impl Processor {
             work.reenqueue(&mut self.redis).await?;
         }
 
+        // TODO: Make this only say "done" when the job is successful.
+        // We might need to change the ChainIter to return the final job and
+        // detect any retries?
         info!(self.logger, "sidekiq";
             "status" => "done",
             "class" => &work.job.class,
