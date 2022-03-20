@@ -1,13 +1,57 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use dyn_clone::DynClone;
-use rand::Rng;
+use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use slog::{debug, error, info};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Helper function for enqueueing a worker into sidekiq.
+/// This can be used to enqueue a job for a ruby sidekiq worker to process.
+pub async fn perform_async(
+    redis: &mut Pool<RedisConnectionManager>,
+    class: String,
+    queue: String,
+    args: impl serde::Serialize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let args = serde_json::to_value(args)?;
+
+    // Ensure args are always wrapped in an array.
+    let args = if args.is_array() {
+        args
+    } else {
+        JsonValue::Array(vec![args])
+    };
+
+    let job = Job {
+        queue: queue,
+        class: class,
+        jid: new_jid(),
+        created_at: chrono::Utc::now().timestamp() as f64,
+        enqueued_at: chrono::Utc::now().timestamp() as f64,
+        retry: true,
+        args: args,
+
+        // Make default eventually...
+        error_message: None,
+        failed_at: None,
+        retry_count: None,
+        retried_at: None,
+    };
+
+    UnitOfWork::from_job(job).enqueue(redis).await?;
+
+    Ok(())
+}
+
+fn new_jid() -> String {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
 
 /// A pseudo iterator used to know which middleware should be called next.
 /// This is created by the Chain type.

@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sidekiq::{ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker};
 use slog::{error, info, o, Drain};
@@ -34,7 +34,7 @@ impl PaymentReportWorker {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Serialize)]
 struct PaymentReportArgs {
     user_guid: String,
 }
@@ -110,9 +110,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
-    let redis = Pool::builder().build(manager).await.unwrap();
+    let mut redis = Pool::builder().build(manager).await.unwrap();
 
-    // Sidekiq
+    // Enqueue a job
+    sidekiq::perform_async(
+        &mut redis,
+        "PaymentReportWorker".into(),
+        "yolo".into(),
+        PaymentReportArgs {
+            user_guid: "USR-123".to_string(),
+        },
+    )
+    .await?;
+
+    // Sidekiq server
     let mut p = Processor::new(redis, logger.clone(), vec!["queue:yolo".to_string()]);
 
     // Add known workers
