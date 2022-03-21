@@ -65,7 +65,7 @@ pub async fn perform_async(
         class: class,
         jid: new_jid(),
         created_at: chrono::Utc::now().timestamp() as f64,
-        enqueued_at: chrono::Utc::now().timestamp() as f64,
+        enqueued_at: None,
         retry: true,
         args: args,
 
@@ -77,6 +77,45 @@ pub async fn perform_async(
     };
 
     UnitOfWork::from_job(job).enqueue(redis).await?;
+
+    Ok(())
+}
+
+/// Helper function for enqueueing a worker into sidekiq.
+/// This can be used to enqueue a job for a ruby sidekiq worker to process.
+pub async fn perform_in(
+    redis: &mut Pool<RedisConnectionManager>,
+    duration: std::time::Duration,
+    class: String,
+    queue: String,
+    args: impl serde::Serialize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let args = serde_json::to_value(args)?;
+
+    // Ensure args are always wrapped in an array.
+    let args = if args.is_array() {
+        args
+    } else {
+        JsonValue::Array(vec![args])
+    };
+
+    let job = Job {
+        queue: queue,
+        class: class,
+        jid: new_jid(),
+        created_at: chrono::Utc::now().timestamp() as f64,
+        enqueued_at: None,
+        retry: true,
+        args: args,
+
+        // Make default eventually...
+        error_message: None,
+        failed_at: None,
+        retry_count: None,
+        retried_at: None,
+    };
+
+    UnitOfWork::from_job(job).schedule(redis, duration).await?;
 
     Ok(())
 }
@@ -120,6 +159,15 @@ where
     ) -> Result<(), Box<dyn std::error::Error>> {
         W::perform_async(redis, args).await
     }
+
+    pub async fn perform_in(
+        &self,
+        redis: &mut Pool<RedisConnectionManager>,
+        duration: std::time::Duration,
+        args: impl serde::Serialize + Send + 'static,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        W::perform_in(redis, duration, args).await
+    }
 }
 
 #[async_trait]
@@ -154,6 +202,18 @@ pub trait Worker: Send + Sync + DynClone {
         crate::perform_async(redis, Self::class_name(), opts.queue, args).await
     }
 
+    async fn perform_in(
+        redis: &mut Pool<RedisConnectionManager>,
+        duration: std::time::Duration,
+        args: impl serde::Serialize + Send + 'static,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        Self: Sized,
+    {
+        let opts = Self::opts();
+        crate::perform_in(redis, duration, Self::class_name(), opts.queue, args).await
+    }
+
     async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>>;
 }
 dyn_clone::clone_trait_object!(Worker);
@@ -181,7 +241,7 @@ pub struct Job {
     pub class: String,
     pub jid: String,
     pub created_at: f64,
-    pub enqueued_at: f64,
+    pub enqueued_at: Option<f64>,
     pub failed_at: Option<f64>,
     pub error_message: Option<String>,
     pub retry_count: Option<usize>,
@@ -219,8 +279,11 @@ impl UnitOfWork {
         &self,
         redis: &mut redis::aio::Connection,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut job = self.job.clone();
+        job.enqueued_at = Some(chrono::Utc::now().timestamp() as f64);
+
         redis
-            .rpush(&self.queue, serde_json::to_string(&self.job)?)
+            .rpush(&self.queue, serde_json::to_string(&job)?)
             .await?;
         Ok(())
     }
@@ -249,5 +312,23 @@ impl UnitOfWork {
             count.pow(4) + 15 + (rand::thread_rng().gen_range(0..30) * (count + 1));
 
         chrono::Utc::now() + chrono::Duration::seconds(seconds_to_delay as i64)
+    }
+
+    pub async fn schedule(
+        &mut self,
+        redis: &mut Pool<RedisConnectionManager>,
+        duration: std::time::Duration,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let enqueue_at = chrono::Utc::now() + chrono::Duration::from_std(duration)?;
+
+        Ok(redis
+            .get()
+            .await?
+            .zadd(
+                "schedule",
+                serde_json::to_string(&self.job)?,
+                enqueue_at.timestamp(),
+            )
+            .await?)
     }
 }

@@ -125,6 +125,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
+    PaymentReportWorker::perform_in(
+        &mut redis,
+        std::time::Duration::from_secs(10),
+        PaymentReportArgs {
+            user_guid: "USR-123".into(),
+        },
+    )
+    .await?;
+
     PaymentReportWorker::opts()
         .queue("brolo")
         .perform_async(
