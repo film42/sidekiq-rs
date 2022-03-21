@@ -117,10 +117,7 @@ let mut p = Processor::new(
 );
 
 // Add known workers
-p.register(
-    "PaymentReportWorker",
-    Box::new(PaymentReportWorker::new(logger.clone())),
-);
+p.register(PaymentReportWorker::new(logger.clone()));
 
 // Custom Middlewares
 p.using(Box::new(FilterExpiredUsersMiddleware::new(logger.clone())))
