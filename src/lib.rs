@@ -5,6 +5,7 @@ use middleware::Chain;
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::marker::PhantomData;
 
 mod middleware;
 mod processor;
@@ -86,13 +87,48 @@ fn new_jid() -> String {
     hex::encode(bytes)
 }
 
+pub struct WorkerOpts<W>
+where
+    W: Worker,
+{
+    queue: String,
+    worker: PhantomData<W>,
+}
+
+impl<W> WorkerOpts<W>
+where
+    W: Worker,
+{
+    pub fn new() -> Self {
+        Self {
+            queue: "default".into(),
+            worker: PhantomData,
+        }
+    }
+
+    pub fn queue<S: Into<String>>(self, queue: S) -> Self {
+        Self {
+            queue: queue.into(),
+            worker: self.worker,
+        }
+    }
+
+    pub async fn perform_async(
+        &self,
+        redis: &mut Pool<RedisConnectionManager>,
+        args: impl serde::Serialize + Send + 'static,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        W::perform_async(redis, args).await
+    }
+}
+
 #[async_trait]
 pub trait Worker: Send + Sync + DynClone {
-    fn default_opts() -> EnqueueOpts
+    fn opts() -> WorkerOpts<Self>
     where
         Self: Sized,
     {
-        crate::opts()
+        WorkerOpts::new()
     }
 
     /// Derive a class_name from the Worker type to be used with sidekiq. By default
@@ -114,7 +150,7 @@ pub trait Worker: Send + Sync + DynClone {
     where
         Self: Sized,
     {
-        let opts = Self::default_opts();
+        let opts = Self::opts();
         crate::perform_async(redis, Self::class_name(), opts.queue, args).await
     }
 

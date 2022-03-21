@@ -41,8 +41,8 @@ struct PaymentReportArgs {
 
 #[async_trait]
 impl Worker for PaymentReportWorker {
-    fn default_opts() -> sidekiq::EnqueueOpts {
-        sidekiq::opts().queue("yolo")
+    fn opts() -> sidekiq::WorkerOpts<Self> {
+        sidekiq::WorkerOpts::new().queue("yolo")
     }
 
     async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
@@ -125,6 +125,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
+    PaymentReportWorker::opts()
+        .queue("brolo")
+        .perform_async(
+            &mut redis,
+            PaymentReportArgs {
+                user_guid: "USR-123".into(),
+            },
+        )
+        .await?;
+
     sidekiq::perform_async(
         &mut redis,
         "PaymentReportWorker".into(),
@@ -159,7 +169,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // Sidekiq server
-    let mut p = Processor::new(redis, logger.clone(), vec!["queue:yolo".to_string()]);
+    let mut p = Processor::new(
+        redis,
+        logger.clone(),
+        vec!["queue:yolo".to_string(), "queue:brolo".to_string()],
+    );
 
     // Add known workers
     p.register("HelloWorker", Box::new(HelloWorker));
