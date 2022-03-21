@@ -25,7 +25,7 @@ impl PaymentReportWorker {
 
     async fn send_report(&self, user_guid: String) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: Some actual work goes here...
-        info!(self.logger, "Sending payment report to user"; "user_guid" => user_guid, "class_name" => Self::class_name());
+        info!(self.logger, "Sending payment report to user"; "user_guid" => user_guid);
 
         Ok(())
     }
@@ -85,7 +85,7 @@ PaymentReportWorker::opts()
 
 Or you can have more control by using the crate level method.
 
-```
+```rust
 sidekiq::perform_async(
     &mut redis,
     "PaymentReportWorker".into(),
