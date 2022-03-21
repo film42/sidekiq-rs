@@ -6,7 +6,7 @@ Sidekiq.rb is obviously much more mature than this repo, but I hope you enjoy us
 so it is async by default.
 
 
-# The Worker
+## The Worker
 
 This library uses serde to make worker arguments strongly typed as needed. Below is an example of a worker with strongly
 typed arguments. It also has custom options that will be used whenever a job is submitted. These can be overridden at 
@@ -54,7 +54,7 @@ impl Worker for PaymentReportWorker {
 }
 ```
 
-# Creating a Job
+## Creating a Job
 
 There are several ways to insert a job, but for this example, we'll keep it simple. Given some worker, insert using strongly
 typed arguments.
@@ -100,7 +100,7 @@ sidekiq::perform_async(
 See more examples in `examples/demo.rs`.
 
 
-# Server Middleware
+## Server Middleware
 
 One great feature of sidekiq is its middleware pattern. This library reimplements the
 sidekiq server middleware pattern in rust. In the example below supposes you have an
@@ -165,6 +165,6 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
 }
 ```
 
-# License
+## License
 
 MIT
