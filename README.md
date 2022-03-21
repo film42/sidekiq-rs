@@ -99,6 +99,36 @@ sidekiq::perform_async(
 
 See more examples in `examples/demo.rs`.
 
+## Starting the Server
+
+Below is an example of how you should create a `Processor`, register workers, include any
+custom middlewares, and start the server.
+
+```rust
+// Redis
+let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
+let mut redis = Pool::builder().build(manager).await.unwrap();
+
+// Sidekiq server
+let mut p = Processor::new(
+    redis,
+    logger.clone(),
+    vec!["queue:yolo".to_string(), "queue:brolo".to_string()],
+);
+
+// Add known workers
+p.register(
+    "PaymentReportWorker",
+    Box::new(PaymentReportWorker::new(logger.clone())),
+);
+
+// Custom Middlewares
+p.using(Box::new(FilterExpiredUsersMiddleware::new(logger.clone())))
+    .await;
+
+// Start the server
+p.run().await;
+```
 
 ## Server Middleware
 
