@@ -24,7 +24,10 @@ impl Processor {
 
             redis,
             logger,
-            queues: queues,
+            queues: queues
+                .iter()
+                .map(|queue| format!("queue:{queue}"))
+                .collect(),
         }
     }
 

@@ -113,7 +113,7 @@ let mut redis = Pool::builder().build(manager).await.unwrap();
 let mut p = Processor::new(
     redis,
     logger.clone(),
-    vec!["queue:yolo".to_string(), "queue:brolo".to_string()],
+    vec!["yolo".to_string(), "brolo".to_string()],
 );
 
 // Add known workers
