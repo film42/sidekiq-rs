@@ -17,7 +17,7 @@ name = "sidekiq"
 tokio = { version = "1", features = ["full"]} 
 serde_json = { version = "1" }
 serde = { version = "1.0", features = ["derive"] }
-redis = { version = "*", features = ["aio", "default", "tokio-comp"] }
+redis = { version = "0.21", features = ["aio", "default", "tokio-comp"] }
 async-trait = "0.1"
 slog = "2.7"
 slog-term = "2.9"
