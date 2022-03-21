@@ -15,7 +15,7 @@ pub use middleware::{ChainIter, ServerMiddleware, ServerResult};
 pub use processor::Processor;
 pub use scheduled::Scheduled;
 
-pub fn opt() -> EnqueueOpts {
+pub fn opts() -> EnqueueOpts {
     EnqueueOpts {
         queue: "default".into(),
     }
@@ -26,8 +26,10 @@ pub struct EnqueueOpts {
 }
 
 impl EnqueueOpts {
-    pub fn queue(self, queue: String) -> Self {
-        EnqueueOpts { queue }
+    pub fn queue<S: Into<String>>(self, queue: S) -> Self {
+        EnqueueOpts {
+            queue: queue.into(),
+        }
     }
 
     pub async fn perform_async(
@@ -86,15 +88,37 @@ fn new_jid() -> String {
 
 #[async_trait]
 pub trait Worker: Send + Sync + DynClone {
-    async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>>;
-
-    fn class_name(&self) -> String {
-        use heck::ToUpperCamelCase;
-
-        std::any::type_name::<Self>()
-            .to_string()
-            .to_upper_camel_case()
+    fn default_opts() -> EnqueueOpts
+    where
+        Self: Sized,
+    {
+        crate::opts()
     }
+
+    /// Derive a class_name from the Worker type to be used with sidekiq. By default
+    /// this method will
+    fn class_name() -> String
+    where
+        Self: Sized,
+    {
+        use heck::ToUpperCamelCase;
+        let type_name = std::any::type_name::<Self>();
+        let name = type_name.split("::").last().unwrap_or(type_name);
+        name.to_upper_camel_case()
+    }
+
+    async fn perform_async(
+        redis: &mut Pool<RedisConnectionManager>,
+        args: impl serde::Serialize + Send + 'static,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        Self: Sized,
+    {
+        let opts = Self::default_opts();
+        crate::perform_async(redis, Self::class_name(), opts.queue, args).await
+    }
+
+    async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>>;
 }
 dyn_clone::clone_trait_object!(Worker);
 

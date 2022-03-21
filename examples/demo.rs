@@ -28,7 +28,7 @@ impl PaymentReportWorker {
 
     async fn send_report(&self, user_guid: String) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: Some actual work goes here...
-        info!(self.logger, "Sending payment report to user"; "user_guid" => user_guid, "class_name" => self.class_name());
+        info!(self.logger, "Sending payment report to user"; "user_guid" => user_guid, "class_name" => Self::class_name());
 
         Ok(())
     }
@@ -41,6 +41,10 @@ struct PaymentReportArgs {
 
 #[async_trait]
 impl Worker for PaymentReportWorker {
+    fn default_opts() -> sidekiq::EnqueueOpts {
+        sidekiq::opts().queue("yolo")
+    }
+
     async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
         // I use serde to pull out my args as a type. I fail if the value cannot be decoded.
         // NOTE: I use a size-one (tuple,) tuple because args are a JsonArray.
@@ -112,6 +116,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
     let mut redis = Pool::builder().build(manager).await.unwrap();
 
+    // Enqueue a job with the worker! There are many ways to do this.
+    PaymentReportWorker::perform_async(
+        &mut redis,
+        PaymentReportArgs {
+            user_guid: "USR-123".into(),
+        },
+    )
+    .await?;
+
+    sidekiq::perform_async(
+        &mut redis,
+        "PaymentReportWorker".into(),
+        "yolo".into(),
+        PaymentReportArgs {
+            user_guid: "USR-123".to_string(),
+        },
+    )
+    .await?;
+
     // Enqueue a job
     sidekiq::perform_async(
         &mut redis,
@@ -124,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // Enqueue a job with options
-    sidekiq::opt()
+    sidekiq::opts()
         .queue("yolo".to_string())
         .perform_async(
             &mut redis,
