@@ -120,7 +120,7 @@ let mut p = Processor::new(
 p.register(PaymentReportWorker::new(logger.clone()));
 
 // Custom Middlewares
-p.using(Box::new(FilterExpiredUsersMiddleware::new(logger.clone())))
+p.using(FilterExpiredUsersMiddleware::new(logger.clone()))
     .await;
 
 // Start the server
