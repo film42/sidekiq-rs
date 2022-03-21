@@ -176,11 +176,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Add known workers
-    p.register("HelloWorker", Box::new(HelloWorker));
-    p.register(
-        "PaymentReportWorker",
-        Box::new(PaymentReportWorker::new(logger.clone())),
-    );
+    p.register(HelloWorker);
+    p.register(PaymentReportWorker::new(logger.clone()));
 
     // Custom Middlewares
     p.using(Box::new(FilterExpiredUsersMiddleware::new(logger.clone())))

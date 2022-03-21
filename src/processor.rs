@@ -72,8 +72,8 @@ impl Processor {
         Ok(())
     }
 
-    pub fn register<S: Into<String>>(&mut self, name: S, worker: Box<dyn Worker>) {
-        self.workers.insert(name.into(), worker);
+    pub fn register<W: Worker + 'static>(&mut self, worker: W) {
+        self.workers.insert(W::class_name(), Box::new(worker));
     }
 
     /// Takes self to consume the processor. This is for life-cycle management, not
