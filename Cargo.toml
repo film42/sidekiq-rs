@@ -1,23 +1,30 @@
 [package]
-name = "sidekiq"
+name = "rusty-sidekiq"
 version = "0.1.0"
 edition = "2021"
+description = "A rust sidekiq server and client using tokio"
+authors = ["Garrett Thornburg <garrett.thornburg@hey.com>"]
+homepage = "https://github.com/film42/sidekiq-rs"
+repository = "https://github.com/film42/sidekiq-rs.git"
+keywords = ["sidekiq", "worker", "tokio", "ruby"]
+license = "MIT"
+readme = "README.md"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "sidekiq"
 
 [dependencies]
-futures = "*"
 tokio = { version = "1", features = ["full"]} 
 serde_json = { version = "1" }
 serde = { version = "1.0", features = ["derive"] }
-redis = { version = "*", features = ["r2d2", "aio", "default", "tokio-comp"] }
-async-trait = "*"
-slog = "*"
-slog-term = "*"
-dyn-clone = "*"
-bb8-redis = "*"
-num_cpus = "*"
-chrono = "*"
-rand = "*"
-hex = "*"
-heck = "*"
+redis = { version = "*", features = ["aio", "default", "tokio-comp"] }
+async-trait = "0.1"
+slog = "2.7"
+slog-term = "2.9"
+dyn-clone = "1"
+bb8-redis = "0.10"
+num_cpus = "1.13"
+chrono = "0.4"
+rand = "0.8"
+hex = "0.4"
+heck = "0.4"
