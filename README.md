@@ -43,7 +43,7 @@ impl Worker for PaymentReportWorker {
         sidekiq::WorkerOpts::new().queue("yolo")
     }
 
-    // Worker implementation method
+    // Worker implementation
     async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
         // I use serde to pull out my args as a type. I fail if the value cannot be decoded.
         // NOTE: I use a size-one (tuple,) tuple because args are a JsonArray.
