@@ -121,7 +121,10 @@ impl Processor {
         }
     }
 
-    pub async fn using(&mut self, middleware: Box<dyn ServerMiddleware + Send + Sync>) {
-        self.chain.using(middleware).await
+    pub async fn using<M>(&mut self, middleware: M)
+    where
+        M: ServerMiddleware + Send + Sync + 'static,
+    {
+        self.chain.using(Box::new(middleware)).await
     }
 }

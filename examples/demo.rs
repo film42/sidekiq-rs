@@ -130,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .perform_async(
             &mut redis,
             PaymentReportArgs {
-                user_guid: "USR-123".into(),
+                user_guid: "USR-123-EXPIRED".into(),
             },
         )
         .await?;
@@ -180,7 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     p.register(PaymentReportWorker::new(logger.clone()));
 
     // Custom Middlewares
-    p.using(Box::new(FilterExpiredUsersMiddleware::new(logger.clone())))
+    p.using(FilterExpiredUsersMiddleware::new(logger.clone()))
         .await;
 
     p.run().await;
