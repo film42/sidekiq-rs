@@ -127,12 +127,11 @@ fn new_jid() -> String {
     hex::encode(bytes)
 }
 
-pub struct WorkerOpts<W>
+pub struct WorkerOpts<W: ?Sized>
 where
     W: Worker,
 {
     queue: String,
-    max_retries: usize,
     retry: bool,
     worker: PhantomData<W>,
 }
@@ -144,7 +143,6 @@ where
     pub fn new() -> Self {
         Self {
             queue: "default".into(),
-            max_retries: 25,
             retry: true,
             worker: PhantomData,
         }
@@ -152,14 +150,6 @@ where
 
     pub fn retry(self, retry: bool) -> Self {
         Self { retry, ..self }
-    }
-
-    pub fn max_retries(self, max_retries: usize) -> Self {
-        Self {
-            max_retries,
-            retry: max_retries > 0,
-            ..self
-        }
     }
 
     pub fn queue<S: Into<String>>(self, queue: S) -> Self {
@@ -214,6 +204,12 @@ pub trait Worker: Send + Sync + DynClone {
         Self: Sized,
     {
         WorkerOpts::new()
+    }
+
+    // TODO: Make configurable through opts and make opts accessible to the
+    // retry middleware through a Box<dyn Worker>.
+    fn max_retries(&self) -> usize {
+        25
     }
 
     /// Derive a class_name from the Worker type to be used with sidekiq. By default
