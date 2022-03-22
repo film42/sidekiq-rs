@@ -45,6 +45,7 @@ impl Processor {
         info!(self.logger, "sidekiq";
             "status" => "start",
             "class" => &work.job.class,
+            "queue" => &work.job.queue,
             "jid" => &work.job.jid
         );
 
@@ -58,6 +59,7 @@ impl Processor {
                 "!!! Worker not found !!!";
                 "staus" => "fail",
                 "class" => &work.job.class,
+                "queue" => &work.job.queue,
                 "jid" => &work.job.jid,
             );
             work.reenqueue(&mut self.redis).await?;
@@ -69,6 +71,7 @@ impl Processor {
         info!(self.logger, "sidekiq";
             "status" => "done",
             "class" => &work.job.class,
+            "queue" => &work.job.queue,
             "jid" => &work.job.jid,
         );
 
