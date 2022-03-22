@@ -19,18 +19,56 @@ pub use scheduled::Scheduled;
 pub fn opts() -> EnqueueOpts {
     EnqueueOpts {
         queue: "default".into(),
+        retry: true,
     }
 }
 
 pub struct EnqueueOpts {
     queue: String,
+    retry: bool,
 }
 
 impl EnqueueOpts {
     pub fn queue<S: Into<String>>(self, queue: S) -> Self {
-        EnqueueOpts {
+        Self {
             queue: queue.into(),
+            ..self
         }
+    }
+
+    pub fn retry(self, retry: bool) -> Self {
+        Self { retry, ..self }
+    }
+
+    fn create_job(
+        &self,
+        class: String,
+        args: impl serde::Serialize,
+    ) -> Result<Job, Box<dyn std::error::Error>> {
+        let args = serde_json::to_value(args)?;
+
+        // Ensure args are always wrapped in an array.
+        let args = if args.is_array() {
+            args
+        } else {
+            JsonValue::Array(vec![args])
+        };
+
+        Ok(Job {
+            queue: self.queue.clone(),
+            class: class,
+            jid: new_jid(),
+            created_at: chrono::Utc::now().timestamp() as f64,
+            enqueued_at: None,
+            retry: self.retry,
+            args: args,
+
+            // Make default eventually...
+            error_message: None,
+            failed_at: None,
+            retry_count: None,
+            retried_at: None,
+        })
     }
 
     pub async fn perform_async(
@@ -39,7 +77,21 @@ impl EnqueueOpts {
         class: String,
         args: impl serde::Serialize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        Ok(perform_async(redis, class, self.queue, args).await?)
+        let job = self.create_job(class, args)?;
+        UnitOfWork::from_job(job).enqueue(redis).await?;
+        Ok(())
+    }
+
+    pub async fn perform_in(
+        &self,
+        redis: &mut Pool<RedisConnectionManager>,
+        class: String,
+        duration: std::time::Duration,
+        args: impl serde::Serialize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let job = self.create_job(class, args)?;
+        UnitOfWork::from_job(job).schedule(redis, duration).await?;
+        Ok(())
     }
 }
 
@@ -51,34 +103,7 @@ pub async fn perform_async(
     queue: String,
     args: impl serde::Serialize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let args = serde_json::to_value(args)?;
-
-    // Ensure args are always wrapped in an array.
-    let args = if args.is_array() {
-        args
-    } else {
-        JsonValue::Array(vec![args])
-    };
-
-    let job = Job {
-        queue: queue,
-        class: class,
-        jid: new_jid(),
-        created_at: chrono::Utc::now().timestamp() as f64,
-        enqueued_at: None,
-        retry: true,
-        args: args,
-
-        // Make default eventually...
-        error_message: None,
-        failed_at: None,
-        retry_count: None,
-        retried_at: None,
-    };
-
-    UnitOfWork::from_job(job).enqueue(redis).await?;
-
-    Ok(())
+    opts().queue(queue).perform_async(redis, class, args).await
 }
 
 /// Helper function for enqueueing a worker into sidekiq.
@@ -90,34 +115,10 @@ pub async fn perform_in(
     queue: String,
     args: impl serde::Serialize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let args = serde_json::to_value(args)?;
-
-    // Ensure args are always wrapped in an array.
-    let args = if args.is_array() {
-        args
-    } else {
-        JsonValue::Array(vec![args])
-    };
-
-    let job = Job {
-        queue: queue,
-        class: class,
-        jid: new_jid(),
-        created_at: chrono::Utc::now().timestamp() as f64,
-        enqueued_at: None,
-        retry: true,
-        args: args,
-
-        // Make default eventually...
-        error_message: None,
-        failed_at: None,
-        retry_count: None,
-        retried_at: None,
-    };
-
-    UnitOfWork::from_job(job).schedule(redis, duration).await?;
-
-    Ok(())
+    opts()
+        .queue(queue)
+        .perform_in(redis, class, duration, args)
+        .await
 }
 
 fn new_jid() -> String {
@@ -126,11 +127,12 @@ fn new_jid() -> String {
     hex::encode(bytes)
 }
 
-pub struct WorkerOpts<W>
+pub struct WorkerOpts<W: ?Sized>
 where
     W: Worker,
 {
     queue: String,
+    retry: bool,
     worker: PhantomData<W>,
 }
 
@@ -141,15 +143,24 @@ where
     pub fn new() -> Self {
         Self {
             queue: "default".into(),
+            retry: true,
             worker: PhantomData,
         }
+    }
+
+    pub fn retry(self, retry: bool) -> Self {
+        Self { retry, ..self }
     }
 
     pub fn queue<S: Into<String>>(self, queue: S) -> Self {
         Self {
             queue: queue.into(),
-            worker: self.worker,
+            ..self
         }
+    }
+
+    fn into_opts(&self) -> EnqueueOpts {
+        self.into()
     }
 
     pub async fn perform_async(
@@ -157,7 +168,9 @@ where
         redis: &mut Pool<RedisConnectionManager>,
         args: impl serde::Serialize + Send + 'static,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        W::perform_async(redis, args).await
+        self.into_opts()
+            .perform_async(redis, W::class_name(), args)
+            .await
     }
 
     pub async fn perform_in(
@@ -166,7 +179,21 @@ where
         duration: std::time::Duration,
         args: impl serde::Serialize + Send + 'static,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        W::perform_in(redis, duration, args).await
+        self.into_opts()
+            .perform_in(redis, W::class_name(), duration, args)
+            .await
+    }
+}
+
+impl<W> From<&WorkerOpts<W>> for EnqueueOpts
+where
+    W: Worker,
+{
+    fn from(opts: &WorkerOpts<W>) -> Self {
+        Self {
+            retry: opts.retry,
+            queue: opts.queue.clone(),
+        }
     }
 }
 
@@ -177,6 +204,12 @@ pub trait Worker: Send + Sync + DynClone {
         Self: Sized,
     {
         WorkerOpts::new()
+    }
+
+    // TODO: Make configurable through opts and make opts accessible to the
+    // retry middleware through a Box<dyn Worker>.
+    fn max_retries(&self) -> usize {
+        25
     }
 
     /// Derive a class_name from the Worker type to be used with sidekiq. By default
@@ -198,8 +231,7 @@ pub trait Worker: Send + Sync + DynClone {
     where
         Self: Sized,
     {
-        let opts = Self::opts();
-        crate::perform_async(redis, Self::class_name(), opts.queue, args).await
+        Self::opts().perform_async(redis, args).await
     }
 
     async fn perform_in(
@@ -210,8 +242,7 @@ pub trait Worker: Send + Sync + DynClone {
     where
         Self: Sized,
     {
-        let opts = Self::opts();
-        crate::perform_in(redis, duration, Self::class_name(), opts.queue, args).await
+        Self::opts().perform_in(redis, duration, args).await
     }
 
     async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>>;

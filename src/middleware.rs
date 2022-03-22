@@ -120,11 +120,6 @@ impl RetryMiddleware {
     fn new(logger: slog::Logger) -> Self {
         Self { logger }
     }
-
-    fn max_retries(&self) -> usize {
-        // TODO: Make configurable at the worker level
-        25
-    }
 }
 
 #[async_trait]
@@ -136,6 +131,8 @@ impl ServerMiddleware for RetryMiddleware {
         worker: Box<dyn Worker>,
         mut redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
+        let max_retries = worker.max_retries();
+
         let err = {
             match chain.next(job.clone(), worker, redis.clone()).await {
                 Ok(()) => return Ok(()),
@@ -154,7 +151,7 @@ impl ServerMiddleware for RetryMiddleware {
         job.retry_count = Some(retry_count);
 
         // Attempt the retry.
-        if retry_count < self.max_retries() {
+        if retry_count < max_retries {
             error!(self.logger,
                 "Scheduling job for retry in the future";
                 "status" => "fail",
