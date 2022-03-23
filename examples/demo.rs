@@ -113,8 +113,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let logger = slog::Logger::root(drain, o!());
 
     // Redis
-    let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
-    let mut redis = Pool::builder().build(manager).await.unwrap();
+    let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
+    let mut redis = Pool::builder().build(manager).await?;
 
     // Enqueue a job with the worker! There are many ways to do this.
     PaymentReportWorker::perform_async(

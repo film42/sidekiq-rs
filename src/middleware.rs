@@ -60,6 +60,14 @@ pub(crate) struct Chain {
 }
 
 impl Chain {
+    // Testing helper to get an empty chain.
+    #[allow(dead_code)]
+    pub(crate) fn empty() -> Self {
+        Self {
+            stack: Arc::new(RwLock::new(vec![])),
+        }
+    }
+
     pub(crate) fn new(logger: slog::Logger) -> Self {
         Self {
             stack: Arc::new(RwLock::new(vec![
@@ -72,7 +80,8 @@ impl Chain {
     pub(crate) async fn using(&mut self, middleware: Box<dyn ServerMiddleware + Send + Sync>) {
         let mut stack = self.stack.write().await;
         // HACK: Insert after retry middleware but before the handler middleware.
-        let index = stack.len() - 1;
+        let index = if stack.is_empty() { 0 } else { stack.len() - 1 };
+
         stack.insert(index, middleware);
     }
 
@@ -167,5 +176,65 @@ impl ServerMiddleware for RetryMiddleware {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use serde_json::Value as JsonValue;
+    use tokio::sync::Mutex;
+
+    async fn redis() -> Pool<RedisConnectionManager> {
+        let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
+        Pool::builder().build(manager).await.unwrap()
+    }
+
+    fn job() -> Job {
+        Job {
+            class: "TestWorker".into(),
+            queue: "default".into(),
+            args: vec![1337].into(),
+            retry: true,
+            jid: crate::new_jid(),
+            created_at: 1337.0,
+            enqueued_at: None,
+            failed_at: None,
+            error_message: None,
+            retry_count: None,
+            retried_at: None,
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestWorker {
+        touched: Arc<Mutex<bool>>,
+    }
+
+    #[async_trait]
+    impl Worker for TestWorker {
+        async fn perform(&self, _args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
+            *self.touched.lock().await = true;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn calls_through_a_middleware_stack() {
+        let worker = Box::new(TestWorker {
+            touched: Arc::new(Mutex::new(false)),
+        });
+
+        let mut chain = Chain::empty();
+        chain.using(Box::new(HandlerMiddleware)).await;
+        chain
+            .call(job(), worker.clone(), redis().await)
+            .await
+            .unwrap();
+
+        assert!(
+            *worker.touched.lock().await,
+            "The job was processed by the middleware",
+        );
     }
 }
