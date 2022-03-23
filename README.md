@@ -1,5 +1,9 @@
-Sidekiq.rs
-==========
+Sidekiq.rs (aka `rusty-sidekiq`)
+================================
+
+[![crates.io](https://img.shields.io/crates/v/rusty-sidekiq.svg)](https://crates.io/crates/rusy-sidekiq/)
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE.md)
+[![Documentation](https://docs.rs/rusty-sidekiq/badge.svg)](https://docs.rs/rusty-sidekiq/)
 
 This is a reimplementation of sidekiq in rust. It is compatible with sidekiq.rb for both submitting and processing jobs.
 Sidekiq.rb is obviously much more mature than this repo, but I hope you enjoy using it. This library is built using tokio
