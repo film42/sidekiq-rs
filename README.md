@@ -168,7 +168,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
     async fn call(
         &self,
         chain: ChainIter,
-        job: Job,
+        job: &Job,
         worker: Box<dyn Worker>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
