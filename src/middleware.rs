@@ -42,8 +42,8 @@ impl ChainIter {
                         stack: self.stack.clone(),
                         index: self.index + 1,
                     },
-                    job.clone(),
-                    worker.clone(),
+                    job,
+                    worker,
                     redis,
                 )
                 .await?;
