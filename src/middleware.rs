@@ -12,7 +12,7 @@ pub trait ServerMiddleware {
     async fn call(
         &self,
         iter: ChainIter,
-        job: Job,
+        job: &Job,
         worker: Box<dyn Worker>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult;
@@ -29,7 +29,7 @@ pub struct ChainIter {
 impl ChainIter {
     pub async fn next(
         &self,
-        job: Job,
+        job: &Job,
         worker: Box<dyn Worker>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
@@ -42,8 +42,8 @@ impl ChainIter {
                         stack: self.stack.clone(),
                         index: self.index + 1,
                     },
-                    job.clone(),
-                    worker.clone(),
+                    job,
+                    worker,
                     redis,
                 )
                 .await?;
@@ -94,7 +94,7 @@ impl Chain {
 
     pub(crate) async fn call(
         &mut self,
-        job: Job,
+        job: &Job,
         worker: Box<dyn Worker>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
@@ -113,11 +113,11 @@ impl ServerMiddleware for HandlerMiddleware {
     async fn call(
         &self,
         _chain: ChainIter,
-        job: Job,
+        job: &Job,
         worker: Box<dyn Worker>,
         _redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
-        worker.perform(job.args).await
+        worker.perform(job.args.clone()).await
     }
 }
 
@@ -136,18 +136,20 @@ impl ServerMiddleware for RetryMiddleware {
     async fn call(
         &self,
         chain: ChainIter,
-        mut job: Job,
+        job: &Job,
         worker: Box<dyn Worker>,
         mut redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         let max_retries = worker.max_retries();
 
         let err = {
-            match chain.next(job.clone(), worker, redis.clone()).await {
+            match chain.next(job, worker, redis.clone()).await {
                 Ok(()) => return Ok(()),
                 Err(err) => format!("{err:?}"),
             }
         };
+
+        let mut job = job.clone();
 
         // Update error fields on the job.
         job.error_message = Some(err);
@@ -170,9 +172,7 @@ impl ServerMiddleware for RetryMiddleware {
                 "err" => &job.error_message,
             );
 
-            UnitOfWork::from_job(job.clone())
-                .reenqueue(&mut redis)
-                .await?;
+            UnitOfWork::from_job(job).reenqueue(&mut redis).await?;
         }
 
         Ok(())

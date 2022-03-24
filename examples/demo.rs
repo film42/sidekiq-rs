@@ -80,7 +80,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
     async fn call(
         &self,
         chain: ChainIter,
-        job: Job,
+        job: &Job,
         worker: Box<dyn Worker>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
@@ -93,8 +93,8 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
                 error!(
                     self.logger,
                     "Detected an expired user, skipping this job";
-                    "class" => job.class,
-                    "jid" => job.jid,
+                    "class" => &job.class,
+                    "jid" => &job.jid,
                     "user_guid" => filter.user_guid,
                 );
                 return Ok(());

@@ -51,7 +51,7 @@ impl Processor {
 
         if let Some(worker) = self.workers.get_mut(&work.job.class) {
             self.chain
-                .call(work.job.clone(), worker.clone(), self.redis.clone())
+                .call(&work.job, worker.clone(), self.redis.clone())
                 .await?;
         } else {
             error!(
