@@ -278,6 +278,13 @@ where
     W: WorkerGeneric<Args> + 'static,
     for<'de> Args: Deserialize<'de>,
 {
+    // TODO: Perf-test this code. It allows callers to impl () on their
+    // worker and if they do this we'll allow any value to work.
+    if std::any::TypeId::of::<Args>() == std::any::TypeId::of::<()>() {
+        let args: Args = serde_json::from_value(JsonValue::Null)?;
+        return Ok(worker.perform(args).await?);
+    }
+
     // If the value contains a single item Vec then
     // you can probably be sure that this is a single value item.
     // Otherwise, the caller can impl a tuple type.
@@ -348,6 +355,9 @@ async fn testing_this_crap() {
             age: 1337,
         })
         .unwrap();
+
+        let y: TestArg = serde_json::from_value(arg.clone()).unwrap();
+        // let y: () = serde_json::from_value(arg.clone()).unwrap();
 
         let x = wrap.call(arg).await.unwrap();
         println!("Res: {:?}", x);

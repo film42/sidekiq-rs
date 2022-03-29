@@ -1,4 +1,4 @@
-use crate::{Job, UnitOfWork, WorkerCaller};
+use crate::{Job, UnitOfWork, WorkerCaller, WorkerGeneric};
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use slog::error;
@@ -221,9 +221,10 @@ mod test {
 
     #[tokio::test]
     async fn calls_through_a_middleware_stack() {
-        let worker = Box::new(TestWorker {
+        let inner = Arc::new(TestWorker {
             touched: Arc::new(Mutex::new(false)),
         });
+        let worker = Arc::new(WorkerCaller::wrap(Arc::clone(&inner)));
 
         let job = job();
         let mut chain = Chain::empty();
@@ -234,7 +235,7 @@ mod test {
             .unwrap();
 
         assert!(
-            *worker.touched.lock().await,
+            *inner.touched.lock().await,
             "The job was processed by the middleware",
         );
     }
