@@ -1,13 +1,14 @@
-use crate::{Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, Worker};
+use crate::{Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, WorkerCaller, WorkerGeneric};
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use slog::{error, info};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Processor {
     redis: Pool<RedisConnectionManager>,
     queues: Vec<String>,
-    workers: BTreeMap<String, Box<dyn Worker>>,
+    workers: BTreeMap<String, Arc<WorkerCaller>>,
     logger: slog::Logger,
     chain: Chain,
 }
@@ -78,8 +79,17 @@ impl Processor {
         Ok(())
     }
 
-    pub fn register<W: Worker + 'static>(&mut self, worker: W) {
-        self.workers.insert(W::class_name(), Box::new(worker));
+    pub fn register<
+        Args: Sync + Send + for<'de> serde::Deserialize<'de> + 'static,
+        W: WorkerGeneric<Args> + 'static,
+    >(
+        &mut self,
+        worker: W,
+    ) {
+        self.workers.insert(
+            W::class_name(),
+            Arc::new(WorkerCaller::wrap(Arc::new(worker))),
+        );
     }
 
     /// Takes self to consume the processor. This is for life-cycle management, not

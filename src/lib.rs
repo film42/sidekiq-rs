@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
-use dyn_clone::DynClone;
 use middleware::Chain;
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::Arc;
 
 mod middleware;
 mod processor;
@@ -127,23 +129,22 @@ fn new_jid() -> String {
     hex::encode(bytes)
 }
 
-pub struct WorkerOpts<W: ?Sized>
-where
-    W: Worker,
-{
+pub struct WorkerOpts<Args, W: WorkerGeneric<Args> + ?Sized> {
     queue: String,
     retry: bool,
+    args: PhantomData<Args>,
     worker: PhantomData<W>,
 }
 
-impl<W> WorkerOpts<W>
+impl<Args, W> WorkerOpts<Args, W>
 where
-    W: Worker,
+    W: WorkerGeneric<Args>,
 {
     pub fn new() -> Self {
         Self {
             queue: "default".into(),
             retry: true,
+            args: PhantomData,
             worker: PhantomData,
         }
     }
@@ -185,11 +186,8 @@ where
     }
 }
 
-impl<W> From<&WorkerOpts<W>> for EnqueueOpts
-where
-    W: Worker,
-{
-    fn from(opts: &WorkerOpts<W>) -> Self {
+impl<Args, W: WorkerGeneric<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
+    fn from(opts: &WorkerOpts<Args, W>) -> Self {
         Self {
             retry: opts.retry,
             queue: opts.queue.clone(),
@@ -197,9 +195,11 @@ where
     }
 }
 
+// CONSTRUCTION
+
 #[async_trait]
-pub trait Worker: Send + Sync + DynClone {
-    fn opts() -> WorkerOpts<Self>
+pub trait WorkerGeneric<Args>: Send + Sync {
+    fn opts() -> WorkerOpts<Args, Self>
     where
         Self: Sized,
     {
@@ -230,6 +230,7 @@ pub trait Worker: Send + Sync + DynClone {
     ) -> Result<(), Box<dyn std::error::Error>>
     where
         Self: Sized,
+        Args: Send + Sync,
     {
         Self::opts().perform_async(redis, args).await
     }
@@ -241,13 +242,117 @@ pub trait Worker: Send + Sync + DynClone {
     ) -> Result<(), Box<dyn std::error::Error>>
     where
         Self: Sized,
+        Args: Send + Sync,
     {
         Self::opts().perform_in(redis, duration, args).await
     }
 
-    async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>>;
+    async fn perform(&self, args: Args) -> Result<(), Box<dyn std::error::Error>>;
 }
-dyn_clone::clone_trait_object!(Worker);
+// dyn_clone::clone_trait_object!(WorkerGeneric);
+
+// CONSTRUCTION
+
+// We can't store a Vec<Box<dyn Worker<Args>>>, because that will only work
+// for a single arg type, but since any worker is JsonValue in and Result out,
+// we can wrap that generic work in a callback that shares the same type.
+// I'm sure this has a fancy name, but I don't know what it is.
+#[derive(Clone)]
+pub struct WorkerCaller {
+    work_fn: Arc<
+        Box<
+            dyn Fn(
+                    JsonValue,
+                )
+                    -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error>>> + Send>>
+                + Send
+                + Sync,
+        >,
+    >,
+    max_retries: usize,
+}
+
+async fn call_worker<Args, W>(args: JsonValue, worker: Arc<W>) -> ServerResult
+where
+    Args: Send + Sync + 'static,
+    W: WorkerGeneric<Args> + 'static,
+    for<'de> Args: Deserialize<'de>,
+{
+    // If the value contains a single item Vec then
+    // you can probably be sure that this is a single value item.
+    // Otherwise, the caller can impl a tuple type.
+    let args = match args {
+        JsonValue::Array(mut arr) if arr.len() == 1 => arr.pop().unwrap(),
+        _ => args,
+    };
+
+    let args: Args = serde_json::from_value(args)?;
+    Ok(worker.perform(args).await?)
+}
+
+impl WorkerCaller {
+    pub(crate) fn wrap<Args, W>(worker: Arc<W>) -> Self
+    where
+        Args: Send + Sync + 'static,
+        W: WorkerGeneric<Args> + 'static,
+        for<'de> Args: Deserialize<'de>,
+    {
+        Self {
+            work_fn: Arc::new(Box::new({
+                let worker = worker.clone();
+                move |args: JsonValue| {
+                    let worker = worker.clone();
+                    Box::pin(async move { Ok(call_worker(args, worker).await?) })
+                    //let args: Args = serde_json::from_value(args).unwrap();
+
+                    //Box::pin(async move { Ok(worker.perform(args).await?) })
+                }
+            })),
+            max_retries: worker.max_retries(),
+        }
+    }
+
+    pub fn max_retries(&self) -> usize {
+        self.max_retries
+    }
+
+    pub async fn call(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
+        (Arc::clone(&self.work_fn))(args).await
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct TestArg {
+    name: String,
+    age: i32,
+}
+
+struct TestGenericWorker;
+
+#[async_trait]
+impl WorkerGeneric<TestArg> for TestGenericWorker {
+    async fn perform(&self, args: TestArg) -> ServerResult {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn testing_this_crap() {
+    let worker = Arc::new(TestGenericWorker);
+    let wrap = Arc::new(WorkerCaller::wrap(worker));
+
+    for _ in 0..1 {
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value(TestArg {
+            name: "test".into(),
+            age: 1337,
+        })
+        .unwrap();
+
+        let x = wrap.call(arg).await.unwrap();
+        println!("Res: {:?}", x);
+    }
+}
 
 //
 // {
