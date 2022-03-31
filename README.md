@@ -48,11 +48,7 @@ impl Worker for PaymentReportWorker {
     }
 
     // Worker implementation
-    async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
-        // I use serde to pull out my args as a type. I fail if the value cannot be decoded.
-        // NOTE: I use a size-one (tuple,) tuple because args are a JsonArray.
-        let (args,): (PaymentReportArgs,) = serde_json::from_value(args)?;
-
+    async fn perform(&self, args: PaymentReportArgs) -> Result<(), Box<dyn std::error::Error>> {
         self.send_report(args.user_guid).await
     }
 }
@@ -169,7 +165,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
         &self,
         chain: ChainIter,
         job: &Job,
-        worker: Box<dyn Worker>,
+        worker: Arc<WorkerCaller>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         // Use serde to check if a user_guid is part of the job args.
