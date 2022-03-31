@@ -182,7 +182,7 @@ impl ServerMiddleware for RetryMiddleware {
 #[cfg(test)]
 mod test {
     use super::*;
-    use serde_json::Value as JsonValue;
+    use crate::Worker;
     use tokio::sync::Mutex;
 
     async fn redis() -> Pool<RedisConnectionManager> {

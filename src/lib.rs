@@ -436,7 +436,9 @@ impl UnitOfWork {
 }
 
 #[cfg(test)]
-mod testing {
+mod test {
+    use super::*;
+
     #[derive(Deserialize, Serialize)]
     struct TestArg {
         name: String,
@@ -447,7 +449,7 @@ mod testing {
 
     #[async_trait]
     impl Worker<TestArg> for TestGenericWorker {
-        async fn perform(&self, args: TestArg) -> ServerResult {
+        async fn perform(&self, _args: TestArg) -> ServerResult {
             Ok(())
         }
     }
