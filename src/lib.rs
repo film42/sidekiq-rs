@@ -224,11 +224,11 @@ pub trait Worker<Args>: Send + Sync {
 
     async fn perform_async(
         redis: &mut Pool<RedisConnectionManager>,
-        args: impl serde::Serialize + Send + 'static,
+        args: Args,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
         Self: Sized,
-        Args: Send + Sync,
+        Args: Send + Sync + serde::Serialize + 'static,
     {
         Self::opts().perform_async(redis, args).await
     }
@@ -236,11 +236,11 @@ pub trait Worker<Args>: Send + Sync {
     async fn perform_in(
         redis: &mut Pool<RedisConnectionManager>,
         duration: std::time::Duration,
-        args: impl serde::Serialize + Send + 'static,
+        args: Args,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
         Self: Sized,
-        Args: Send + Sync,
+        Args: Send + Sync + serde::Serialize + 'static,
     {
         Self::opts().perform_in(redis, duration, args).await
     }
@@ -305,9 +305,6 @@ impl WorkerCaller {
                 move |args: JsonValue| {
                     let worker = worker.clone();
                     Box::pin(async move { Ok(call_worker(args, worker).await?) })
-                    //let args: Args = serde_json::from_value(args).unwrap();
-
-                    //Box::pin(async move { Ok(worker.perform(args).await?) })
                 }
             })),
             max_retries: worker.max_retries(),
