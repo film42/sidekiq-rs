@@ -197,6 +197,14 @@ impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
 
 #[async_trait]
 pub trait Worker<Args>: Send + Sync {
+    /// Signal to WorkerRef to not attempt to modify the JsonValue args
+    /// before calling the perform function. This is useful if the args
+    /// are expected to be a `Vec<T>` that might be `len() == 1` or a
+    /// single sized tuple `(T,)`.
+    fn disable_argument_coercion(&self) -> bool {
+        false
+    }
+
     fn opts() -> WorkerOpts<Args, Self>
     where
         Self: Sized,
@@ -267,25 +275,29 @@ pub struct WorkerRef {
     max_retries: usize,
 }
 
-async fn call_worker<Args, W>(args: JsonValue, worker: Arc<W>) -> ServerResult
+async fn invoke_worker<Args, W>(args: JsonValue, worker: Arc<W>) -> ServerResult
 where
     Args: Send + Sync + 'static,
     W: Worker<Args> + 'static,
     for<'de> Args: Deserialize<'de>,
 {
-    // TODO: Perf-test this code. It allows callers to impl () on their
-    // worker and if they do this we'll allow any value to work.
-    if std::any::TypeId::of::<Args>() == std::any::TypeId::of::<()>() {
-        let args: Args = serde_json::from_value(JsonValue::Null)?;
-        return Ok(worker.perform(args).await?);
-    }
-
-    // If the value contains a single item Vec then
-    // you can probably be sure that this is a single value item.
-    // Otherwise, the caller can impl a tuple type.
-    let args = match args {
-        JsonValue::Array(mut arr) if arr.len() == 1 => arr.pop().unwrap(),
-        _ => args,
+    let args = if worker.disable_argument_coercion() {
+        args
+    } else {
+        // Ensure any caller expecting to receive `()` will always work.
+        if std::any::TypeId::of::<Args>() == std::any::TypeId::of::<()>() {
+            JsonValue::Null
+        } else {
+            // If the value contains a single item Vec then
+            // you can probably be sure that this is a single value item.
+            // Otherwise, the caller can impl a tuple type.
+            match args {
+                JsonValue::Array(mut arr) if arr.len() == 1 => {
+                    arr.pop().expect("value change after size check")
+                }
+                _ => args,
+            }
+        }
     };
 
     let args: Args = serde_json::from_value(args)?;
@@ -304,7 +316,7 @@ impl WorkerRef {
                 let worker = worker.clone();
                 move |args: JsonValue| {
                     let worker = worker.clone();
-                    Box::pin(async move { Ok(call_worker(args, worker).await?) })
+                    Box::pin(async move { Ok(invoke_worker(args, worker).await?) })
                 }
             })),
             max_retries: worker.max_retries(),
@@ -439,14 +451,13 @@ impl UnitOfWork {
 mod test {
     use super::*;
 
-    #[derive(Deserialize, Serialize)]
+    #[derive(Deserialize, Serialize, Debug)]
     struct TestArg {
         name: String,
         age: i32,
     }
 
     struct TestGenericWorker;
-
     #[async_trait]
     impl Worker<TestArg> for TestGenericWorker {
         async fn perform(&self, _args: TestArg) -> ServerResult {
@@ -454,20 +465,109 @@ mod test {
         }
     }
 
+    struct TestMultiArgWorker;
+    #[async_trait]
+    impl Worker<(TestArg, TestArg)> for TestMultiArgWorker {
+        async fn perform(&self, _args: (TestArg, TestArg)) -> ServerResult {
+            Ok(())
+        }
+    }
+
+    struct TestTupleArgWorker;
+    #[async_trait]
+    impl Worker<(TestArg,)> for TestTupleArgWorker {
+        fn disable_argument_coercion(&self) -> bool {
+            true
+        }
+        async fn perform(&self, _args: (TestArg,)) -> ServerResult {
+            Ok(())
+        }
+    }
+
+    struct TestVecArgWorker;
+    #[async_trait]
+    impl Worker<Vec<TestArg>> for TestVecArgWorker {
+        fn disable_argument_coercion(&self) -> bool {
+            true
+        }
+        async fn perform(&self, _args: Vec<TestArg>) -> ServerResult {
+            Ok(())
+        }
+    }
+
     #[tokio::test]
-    async fn testing_some_basic_configuration() {
+    async fn can_have_a_vec_with_one_or_more_items() {
+        // One item
+        let worker = Arc::new(TestVecArgWorker);
+        let wrap = Arc::new(WorkerRef::wrap(worker));
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value(vec![TestArg {
+            name: "test A".into(),
+            age: 1337,
+        }])
+        .unwrap();
+        wrap.call(arg).await.unwrap();
+
+        // Multiple items
+        let worker = Arc::new(TestVecArgWorker);
+        let wrap = Arc::new(WorkerRef::wrap(worker));
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value(vec![
+            TestArg {
+                name: "test A".into(),
+                age: 1337,
+            },
+            TestArg {
+                name: "test A".into(),
+                age: 1337,
+            },
+        ])
+        .unwrap();
+        wrap.call(arg).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn can_have_multiple_arguments() {
+        let worker = Arc::new(TestMultiArgWorker);
+        let wrap = Arc::new(WorkerRef::wrap(worker));
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value((
+            TestArg {
+                name: "test A".into(),
+                age: 1337,
+            },
+            TestArg {
+                name: "test B".into(),
+                age: 1336,
+            },
+        ))
+        .unwrap();
+        wrap.call(arg).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn can_have_a_single_tuple_argument() {
+        let worker = Arc::new(TestTupleArgWorker);
+        let wrap = Arc::new(WorkerRef::wrap(worker));
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value((TestArg {
+            name: "test".into(),
+            age: 1337,
+        },))
+        .unwrap();
+        wrap.call(arg).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn can_have_a_single_argument() {
         let worker = Arc::new(TestGenericWorker);
         let wrap = Arc::new(WorkerRef::wrap(worker));
-
-        for _ in 0..1 {
-            let wrap = wrap.clone();
-            let arg = serde_json::to_value(TestArg {
-                name: "test".into(),
-                age: 1337,
-            })
-            .unwrap();
-
-            wrap.call(arg).await.unwrap();
-        }
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value(TestArg {
+            name: "test".into(),
+            age: 1337,
+        })
+        .unwrap();
+        wrap.call(arg).await.unwrap();
     }
 }
