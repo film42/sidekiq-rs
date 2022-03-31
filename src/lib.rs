@@ -129,7 +129,7 @@ fn new_jid() -> String {
     hex::encode(bytes)
 }
 
-pub struct WorkerOpts<Args, W: WorkerGeneric<Args> + ?Sized> {
+pub struct WorkerOpts<Args, W: Worker<Args> + ?Sized> {
     queue: String,
     retry: bool,
     args: PhantomData<Args>,
@@ -138,7 +138,7 @@ pub struct WorkerOpts<Args, W: WorkerGeneric<Args> + ?Sized> {
 
 impl<Args, W> WorkerOpts<Args, W>
 where
-    W: WorkerGeneric<Args>,
+    W: Worker<Args>,
 {
     pub fn new() -> Self {
         Self {
@@ -186,7 +186,7 @@ where
     }
 }
 
-impl<Args, W: WorkerGeneric<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
+impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
     fn from(opts: &WorkerOpts<Args, W>) -> Self {
         Self {
             retry: opts.retry,
@@ -195,10 +195,8 @@ impl<Args, W: WorkerGeneric<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
     }
 }
 
-// CONSTRUCTION
-
 #[async_trait]
-pub trait WorkerGeneric<Args>: Send + Sync {
+pub trait Worker<Args>: Send + Sync {
     fn opts() -> WorkerOpts<Args, Self>
     where
         Self: Sized,
@@ -249,9 +247,6 @@ pub trait WorkerGeneric<Args>: Send + Sync {
 
     async fn perform(&self, args: Args) -> Result<(), Box<dyn std::error::Error>>;
 }
-// dyn_clone::clone_trait_object!(WorkerGeneric);
-
-// CONSTRUCTION
 
 // We can't store a Vec<Box<dyn Worker<Args>>>, because that will only work
 // for a single arg type, but since any worker is JsonValue in and Result out,
@@ -275,7 +270,7 @@ pub struct WorkerCaller {
 async fn call_worker<Args, W>(args: JsonValue, worker: Arc<W>) -> ServerResult
 where
     Args: Send + Sync + 'static,
-    W: WorkerGeneric<Args> + 'static,
+    W: Worker<Args> + 'static,
     for<'de> Args: Deserialize<'de>,
 {
     // TODO: Perf-test this code. It allows callers to impl () on their
@@ -301,7 +296,7 @@ impl WorkerCaller {
     pub(crate) fn wrap<Args, W>(worker: Arc<W>) -> Self
     where
         Args: Send + Sync + 'static,
-        W: WorkerGeneric<Args> + 'static,
+        W: Worker<Args> + 'static,
         for<'de> Args: Deserialize<'de>,
     {
         Self {
@@ -325,42 +320,6 @@ impl WorkerCaller {
 
     pub async fn call(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
         (Arc::clone(&self.work_fn))(args).await
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-struct TestArg {
-    name: String,
-    age: i32,
-}
-
-struct TestGenericWorker;
-
-#[async_trait]
-impl WorkerGeneric<TestArg> for TestGenericWorker {
-    async fn perform(&self, args: TestArg) -> ServerResult {
-        Ok(())
-    }
-}
-
-#[tokio::test]
-async fn testing_this_crap() {
-    let worker = Arc::new(TestGenericWorker);
-    let wrap = Arc::new(WorkerCaller::wrap(worker));
-
-    for _ in 0..1 {
-        let wrap = wrap.clone();
-        let arg = serde_json::to_value(TestArg {
-            name: "test".into(),
-            age: 1337,
-        })
-        .unwrap();
-
-        let y: TestArg = serde_json::from_value(arg.clone()).unwrap();
-        // let y: () = serde_json::from_value(arg.clone()).unwrap();
-
-        let x = wrap.call(arg).await.unwrap();
-        println!("Res: {:?}", x);
     }
 }
 
@@ -476,5 +435,40 @@ impl UnitOfWork {
                 enqueue_at.timestamp(),
             )
             .await?)
+    }
+}
+
+#[cfg(test)]
+mod testing {
+    #[derive(Deserialize, Serialize)]
+    struct TestArg {
+        name: String,
+        age: i32,
+    }
+
+    struct TestGenericWorker;
+
+    #[async_trait]
+    impl Worker<TestArg> for TestGenericWorker {
+        async fn perform(&self, args: TestArg) -> ServerResult {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn testing_some_basic_configuration() {
+        let worker = Arc::new(TestGenericWorker);
+        let wrap = Arc::new(WorkerCaller::wrap(worker));
+
+        for _ in 0..1 {
+            let wrap = wrap.clone();
+            let arg = serde_json::to_value(TestArg {
+                name: "test".into(),
+                age: 1337,
+            })
+            .unwrap();
+
+            wrap.call(arg).await.unwrap();
+        }
     }
 }

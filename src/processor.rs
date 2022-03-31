@@ -1,4 +1,4 @@
-use crate::{Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, WorkerCaller, WorkerGeneric};
+use crate::{Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, Worker, WorkerCaller};
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use slog::{error, info};
 use std::collections::BTreeMap;
@@ -81,7 +81,7 @@ impl Processor {
 
     pub fn register<
         Args: Sync + Send + for<'de> serde::Deserialize<'de> + 'static,
-        W: WorkerGeneric<Args> + 'static,
+        W: Worker<Args> + 'static,
     >(
         &mut self,
         worker: W,

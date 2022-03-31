@@ -1,4 +1,4 @@
-use crate::{Job, UnitOfWork, WorkerCaller, WorkerGeneric};
+use crate::{Job, UnitOfWork, WorkerCaller};
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use slog::error;
@@ -212,7 +212,7 @@ mod test {
     }
 
     #[async_trait]
-    impl WorkerGeneric<()> for TestWorker {
+    impl Worker<()> for TestWorker {
         async fn perform(&self, _args: ()) -> Result<(), Box<dyn std::error::Error>> {
             *self.touched.lock().await = true;
             Ok(())
