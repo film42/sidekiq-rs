@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
-use dyn_clone::DynClone;
 use middleware::Chain;
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::Arc;
 
 mod middleware;
 mod processor;
@@ -127,23 +129,22 @@ fn new_jid() -> String {
     hex::encode(bytes)
 }
 
-pub struct WorkerOpts<W: ?Sized>
-where
-    W: Worker,
-{
+pub struct WorkerOpts<Args, W: Worker<Args> + ?Sized> {
     queue: String,
     retry: bool,
+    args: PhantomData<Args>,
     worker: PhantomData<W>,
 }
 
-impl<W> WorkerOpts<W>
+impl<Args, W> WorkerOpts<Args, W>
 where
-    W: Worker,
+    W: Worker<Args>,
 {
     pub fn new() -> Self {
         Self {
             queue: "default".into(),
             retry: true,
+            args: PhantomData,
             worker: PhantomData,
         }
     }
@@ -185,11 +186,8 @@ where
     }
 }
 
-impl<W> From<&WorkerOpts<W>> for EnqueueOpts
-where
-    W: Worker,
-{
-    fn from(opts: &WorkerOpts<W>) -> Self {
+impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
+    fn from(opts: &WorkerOpts<Args, W>) -> Self {
         Self {
             retry: opts.retry,
             queue: opts.queue.clone(),
@@ -198,8 +196,16 @@ where
 }
 
 #[async_trait]
-pub trait Worker: Send + Sync + DynClone {
-    fn opts() -> WorkerOpts<Self>
+pub trait Worker<Args>: Send + Sync {
+    /// Signal to WorkerRef to not attempt to modify the JsonValue args
+    /// before calling the perform function. This is useful if the args
+    /// are expected to be a `Vec<T>` that might be `len() == 1` or a
+    /// single sized tuple `(T,)`.
+    fn disable_argument_coercion(&self) -> bool {
+        false
+    }
+
+    fn opts() -> WorkerOpts<Args, Self>
     where
         Self: Sized,
     {
@@ -226,10 +232,11 @@ pub trait Worker: Send + Sync + DynClone {
 
     async fn perform_async(
         redis: &mut Pool<RedisConnectionManager>,
-        args: impl serde::Serialize + Send + 'static,
+        args: Args,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
         Self: Sized,
+        Args: Send + Sync + serde::Serialize + 'static,
     {
         Self::opts().perform_async(redis, args).await
     }
@@ -237,17 +244,93 @@ pub trait Worker: Send + Sync + DynClone {
     async fn perform_in(
         redis: &mut Pool<RedisConnectionManager>,
         duration: std::time::Duration,
-        args: impl serde::Serialize + Send + 'static,
+        args: Args,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
         Self: Sized,
+        Args: Send + Sync + serde::Serialize + 'static,
     {
         Self::opts().perform_in(redis, duration, args).await
     }
 
-    async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>>;
+    async fn perform(&self, args: Args) -> Result<(), Box<dyn std::error::Error>>;
 }
-dyn_clone::clone_trait_object!(Worker);
+
+// We can't store a Vec<Box<dyn Worker<Args>>>, because that will only work
+// for a single arg type, but since any worker is JsonValue in and Result out,
+// we can wrap that generic work in a callback that shares the same type.
+// I'm sure this has a fancy name, but I don't know what it is.
+#[derive(Clone)]
+pub struct WorkerRef {
+    work_fn: Arc<
+        Box<
+            dyn Fn(
+                    JsonValue,
+                )
+                    -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error>>> + Send>>
+                + Send
+                + Sync,
+        >,
+    >,
+    max_retries: usize,
+}
+
+async fn invoke_worker<Args, W>(args: JsonValue, worker: Arc<W>) -> ServerResult
+where
+    Args: Send + Sync + 'static,
+    W: Worker<Args> + 'static,
+    for<'de> Args: Deserialize<'de>,
+{
+    let args = if worker.disable_argument_coercion() {
+        args
+    } else {
+        // Ensure any caller expecting to receive `()` will always work.
+        if std::any::TypeId::of::<Args>() == std::any::TypeId::of::<()>() {
+            JsonValue::Null
+        } else {
+            // If the value contains a single item Vec then
+            // you can probably be sure that this is a single value item.
+            // Otherwise, the caller can impl a tuple type.
+            match args {
+                JsonValue::Array(mut arr) if arr.len() == 1 => {
+                    arr.pop().expect("value change after size check")
+                }
+                _ => args,
+            }
+        }
+    };
+
+    let args: Args = serde_json::from_value(args)?;
+    Ok(worker.perform(args).await?)
+}
+
+impl WorkerRef {
+    pub(crate) fn wrap<Args, W>(worker: Arc<W>) -> Self
+    where
+        Args: Send + Sync + 'static,
+        W: Worker<Args> + 'static,
+        for<'de> Args: Deserialize<'de>,
+    {
+        Self {
+            work_fn: Arc::new(Box::new({
+                let worker = worker.clone();
+                move |args: JsonValue| {
+                    let worker = worker.clone();
+                    Box::pin(async move { Ok(invoke_worker(args, worker).await?) })
+                }
+            })),
+            max_retries: worker.max_retries(),
+        }
+    }
+
+    pub fn max_retries(&self) -> usize {
+        self.max_retries
+    }
+
+    pub async fn call(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
+        (Arc::clone(&self.work_fn))(args).await
+    }
+}
 
 //
 // {
@@ -361,5 +444,130 @@ impl UnitOfWork {
                 enqueue_at.timestamp(),
             )
             .await?)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[derive(Deserialize, Serialize, Debug)]
+    struct TestArg {
+        name: String,
+        age: i32,
+    }
+
+    struct TestGenericWorker;
+    #[async_trait]
+    impl Worker<TestArg> for TestGenericWorker {
+        async fn perform(&self, _args: TestArg) -> ServerResult {
+            Ok(())
+        }
+    }
+
+    struct TestMultiArgWorker;
+    #[async_trait]
+    impl Worker<(TestArg, TestArg)> for TestMultiArgWorker {
+        async fn perform(&self, _args: (TestArg, TestArg)) -> ServerResult {
+            Ok(())
+        }
+    }
+
+    struct TestTupleArgWorker;
+    #[async_trait]
+    impl Worker<(TestArg,)> for TestTupleArgWorker {
+        fn disable_argument_coercion(&self) -> bool {
+            true
+        }
+        async fn perform(&self, _args: (TestArg,)) -> ServerResult {
+            Ok(())
+        }
+    }
+
+    struct TestVecArgWorker;
+    #[async_trait]
+    impl Worker<Vec<TestArg>> for TestVecArgWorker {
+        fn disable_argument_coercion(&self) -> bool {
+            true
+        }
+        async fn perform(&self, _args: Vec<TestArg>) -> ServerResult {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn can_have_a_vec_with_one_or_more_items() {
+        // One item
+        let worker = Arc::new(TestVecArgWorker);
+        let wrap = Arc::new(WorkerRef::wrap(worker));
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value(vec![TestArg {
+            name: "test A".into(),
+            age: 1337,
+        }])
+        .unwrap();
+        wrap.call(arg).await.unwrap();
+
+        // Multiple items
+        let worker = Arc::new(TestVecArgWorker);
+        let wrap = Arc::new(WorkerRef::wrap(worker));
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value(vec![
+            TestArg {
+                name: "test A".into(),
+                age: 1337,
+            },
+            TestArg {
+                name: "test A".into(),
+                age: 1337,
+            },
+        ])
+        .unwrap();
+        wrap.call(arg).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn can_have_multiple_arguments() {
+        let worker = Arc::new(TestMultiArgWorker);
+        let wrap = Arc::new(WorkerRef::wrap(worker));
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value((
+            TestArg {
+                name: "test A".into(),
+                age: 1337,
+            },
+            TestArg {
+                name: "test B".into(),
+                age: 1336,
+            },
+        ))
+        .unwrap();
+        wrap.call(arg).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn can_have_a_single_tuple_argument() {
+        let worker = Arc::new(TestTupleArgWorker);
+        let wrap = Arc::new(WorkerRef::wrap(worker));
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value((TestArg {
+            name: "test".into(),
+            age: 1337,
+        },))
+        .unwrap();
+        wrap.call(arg).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn can_have_a_single_argument() {
+        let worker = Arc::new(TestGenericWorker);
+        let wrap = Arc::new(WorkerRef::wrap(worker));
+        let wrap = wrap.clone();
+        let arg = serde_json::to_value(TestArg {
+            name: "test".into(),
+            age: 1337,
+        })
+        .unwrap();
+        wrap.call(arg).await.unwrap();
     }
 }

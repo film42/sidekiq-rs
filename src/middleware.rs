@@ -1,4 +1,4 @@
-use crate::{Job, UnitOfWork, Worker};
+use crate::{Job, UnitOfWork, WorkerRef};
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use slog::error;
@@ -13,7 +13,7 @@ pub trait ServerMiddleware {
         &self,
         iter: ChainIter,
         job: &Job,
-        worker: Box<dyn Worker>,
+        worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult;
 }
@@ -30,7 +30,7 @@ impl ChainIter {
     pub async fn next(
         &self,
         job: &Job,
-        worker: Box<dyn Worker>,
+        worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         let stack = self.stack.read().await;
@@ -95,7 +95,7 @@ impl Chain {
     pub(crate) async fn call(
         &mut self,
         job: &Job,
-        worker: Box<dyn Worker>,
+        worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         // The middleware must call bottom of the stack to the top.
@@ -114,10 +114,10 @@ impl ServerMiddleware for HandlerMiddleware {
         &self,
         _chain: ChainIter,
         job: &Job,
-        worker: Box<dyn Worker>,
+        worker: Arc<WorkerRef>,
         _redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
-        worker.perform(job.args.clone()).await
+        worker.call(job.args.clone()).await
     }
 }
 
@@ -137,7 +137,7 @@ impl ServerMiddleware for RetryMiddleware {
         &self,
         chain: ChainIter,
         job: &Job,
-        worker: Box<dyn Worker>,
+        worker: Arc<WorkerRef>,
         mut redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         let max_retries = worker.max_retries();
@@ -182,7 +182,7 @@ impl ServerMiddleware for RetryMiddleware {
 #[cfg(test)]
 mod test {
     use super::*;
-    use serde_json::Value as JsonValue;
+    use crate::Worker;
     use tokio::sync::Mutex;
 
     async fn redis() -> Pool<RedisConnectionManager> {
@@ -212,8 +212,8 @@ mod test {
     }
 
     #[async_trait]
-    impl Worker for TestWorker {
-        async fn perform(&self, _args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
+    impl Worker<()> for TestWorker {
+        async fn perform(&self, _args: ()) -> Result<(), Box<dyn std::error::Error>> {
             *self.touched.lock().await = true;
             Ok(())
         }
@@ -221,19 +221,21 @@ mod test {
 
     #[tokio::test]
     async fn calls_through_a_middleware_stack() {
-        let worker = Box::new(TestWorker {
+        let inner = Arc::new(TestWorker {
             touched: Arc::new(Mutex::new(false)),
         });
+        let worker = Arc::new(WorkerRef::wrap(Arc::clone(&inner)));
 
+        let job = job();
         let mut chain = Chain::empty();
         chain.using(Box::new(HandlerMiddleware)).await;
         chain
-            .call(job(), worker.clone(), redis().await)
+            .call(&job, worker.clone(), redis().await)
             .await
             .unwrap();
 
         assert!(
-            *worker.touched.lock().await,
+            *inner.touched.lock().await,
             "The job was processed by the middleware",
         );
     }

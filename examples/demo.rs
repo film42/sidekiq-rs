@@ -1,16 +1,16 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-use sidekiq::{ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker};
+use sidekiq::{ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker, WorkerRef};
 use slog::{error, info, o, Drain};
+use std::sync::Arc;
 
 #[derive(Clone)]
 struct HelloWorker;
 
 #[async_trait]
-impl Worker for HelloWorker {
-    async fn perform(&self, _args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
+impl Worker<()> for HelloWorker {
+    async fn perform(&self, _args: ()) -> Result<(), Box<dyn std::error::Error>> {
         // I don't use any args. I do my own work.
         Ok(())
     }
@@ -40,16 +40,12 @@ struct PaymentReportArgs {
 }
 
 #[async_trait]
-impl Worker for PaymentReportWorker {
-    fn opts() -> sidekiq::WorkerOpts<Self> {
+impl Worker<PaymentReportArgs> for PaymentReportWorker {
+    fn opts() -> sidekiq::WorkerOpts<PaymentReportArgs, Self> {
         sidekiq::WorkerOpts::new().queue("yolo")
     }
 
-    async fn perform(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
-        // I use serde to pull out my args as a type. I fail if the value cannot be decoded.
-        // NOTE: I use a size-one (tuple,) tuple because args are a JsonArray.
-        let (args,): (PaymentReportArgs,) = serde_json::from_value(args)?;
-
+    async fn perform(&self, args: PaymentReportArgs) -> Result<(), Box<dyn std::error::Error>> {
         self.send_report(args.user_guid).await
     }
 }
@@ -81,7 +77,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
         &self,
         chain: ChainIter,
         job: &Job,
-        worker: Box<dyn Worker>,
+        worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         let args: Result<(FiltereExpiredUsersArgs,), serde_json::Error> =
