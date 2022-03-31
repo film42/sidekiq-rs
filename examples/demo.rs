@@ -1,10 +1,7 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-use sidekiq::{
-    ChainIter, Job, Processor, ServerMiddleware, ServerResult, WorkerCaller, WorkerGeneric,
-};
+use sidekiq::{ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker, WorkerCaller};
 use slog::{error, info, o, Drain};
 use std::sync::Arc;
 
@@ -12,7 +9,7 @@ use std::sync::Arc;
 struct HelloWorker;
 
 #[async_trait]
-impl WorkerGeneric<()> for HelloWorker {
+impl Worker<()> for HelloWorker {
     async fn perform(&self, _args: ()) -> Result<(), Box<dyn std::error::Error>> {
         // I don't use any args. I do my own work.
         Ok(())
@@ -43,7 +40,7 @@ struct PaymentReportArgs {
 }
 
 #[async_trait]
-impl WorkerGeneric<PaymentReportArgs> for PaymentReportWorker {
+impl Worker<PaymentReportArgs> for PaymentReportWorker {
     fn opts() -> sidekiq::WorkerOpts<PaymentReportArgs, Self> {
         sidekiq::WorkerOpts::new().queue("yolo")
     }
