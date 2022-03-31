@@ -165,7 +165,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
         &self,
         chain: ChainIter,
         job: &Job,
-        worker: Arc<WorkerCaller>,
+        worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         // Use serde to check if a user_guid is part of the job args.

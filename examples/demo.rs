@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use serde::{Deserialize, Serialize};
-use sidekiq::{ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker, WorkerCaller};
+use sidekiq::{ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker, WorkerRef};
 use slog::{error, info, o, Drain};
 use std::sync::Arc;
 
@@ -77,7 +77,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
         &self,
         chain: ChainIter,
         job: &Job,
-        worker: Arc<WorkerCaller>,
+        worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         let args: Result<(FiltereExpiredUsersArgs,), serde_json::Error> =

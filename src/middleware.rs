@@ -1,4 +1,4 @@
-use crate::{Job, UnitOfWork, WorkerCaller};
+use crate::{Job, UnitOfWork, WorkerRef};
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use slog::error;
@@ -13,7 +13,7 @@ pub trait ServerMiddleware {
         &self,
         iter: ChainIter,
         job: &Job,
-        worker: Arc<WorkerCaller>,
+        worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult;
 }
@@ -30,7 +30,7 @@ impl ChainIter {
     pub async fn next(
         &self,
         job: &Job,
-        worker: Arc<WorkerCaller>,
+        worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         let stack = self.stack.read().await;
@@ -95,7 +95,7 @@ impl Chain {
     pub(crate) async fn call(
         &mut self,
         job: &Job,
-        worker: Arc<WorkerCaller>,
+        worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         // The middleware must call bottom of the stack to the top.
@@ -114,7 +114,7 @@ impl ServerMiddleware for HandlerMiddleware {
         &self,
         _chain: ChainIter,
         job: &Job,
-        worker: Arc<WorkerCaller>,
+        worker: Arc<WorkerRef>,
         _redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         worker.call(job.args.clone()).await
@@ -137,7 +137,7 @@ impl ServerMiddleware for RetryMiddleware {
         &self,
         chain: ChainIter,
         job: &Job,
-        worker: Arc<WorkerCaller>,
+        worker: Arc<WorkerRef>,
         mut redis: Pool<RedisConnectionManager>,
     ) -> ServerResult {
         let max_retries = worker.max_retries();
@@ -224,7 +224,7 @@ mod test {
         let inner = Arc::new(TestWorker {
             touched: Arc::new(Mutex::new(false)),
         });
-        let worker = Arc::new(WorkerCaller::wrap(Arc::clone(&inner)));
+        let worker = Arc::new(WorkerRef::wrap(Arc::clone(&inner)));
 
         let job = job();
         let mut chain = Chain::empty();

@@ -253,7 +253,7 @@ pub trait Worker<Args>: Send + Sync {
 // we can wrap that generic work in a callback that shares the same type.
 // I'm sure this has a fancy name, but I don't know what it is.
 #[derive(Clone)]
-pub struct WorkerCaller {
+pub struct WorkerRef {
     work_fn: Arc<
         Box<
             dyn Fn(
@@ -292,7 +292,7 @@ where
     Ok(worker.perform(args).await?)
 }
 
-impl WorkerCaller {
+impl WorkerRef {
     pub(crate) fn wrap<Args, W>(worker: Arc<W>) -> Self
     where
         Args: Send + Sync + 'static,
@@ -457,7 +457,7 @@ mod test {
     #[tokio::test]
     async fn testing_some_basic_configuration() {
         let worker = Arc::new(TestGenericWorker);
-        let wrap = Arc::new(WorkerCaller::wrap(worker));
+        let wrap = Arc::new(WorkerRef::wrap(worker));
 
         for _ in 0..1 {
             let wrap = wrap.clone();

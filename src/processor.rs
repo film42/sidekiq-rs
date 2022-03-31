@@ -1,4 +1,4 @@
-use crate::{Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, Worker, WorkerCaller};
+use crate::{Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, Worker, WorkerRef};
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use slog::{error, info};
 use std::collections::BTreeMap;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 pub struct Processor {
     redis: Pool<RedisConnectionManager>,
     queues: Vec<String>,
-    workers: BTreeMap<String, Arc<WorkerCaller>>,
+    workers: BTreeMap<String, Arc<WorkerRef>>,
     logger: slog::Logger,
     chain: Chain,
 }
@@ -86,10 +86,8 @@ impl Processor {
         &mut self,
         worker: W,
     ) {
-        self.workers.insert(
-            W::class_name(),
-            Arc::new(WorkerCaller::wrap(Arc::new(worker))),
-        );
+        self.workers
+            .insert(W::class_name(), Arc::new(WorkerRef::wrap(Arc::new(worker))));
     }
 
     /// Takes self to consume the processor. This is for life-cycle management, not
