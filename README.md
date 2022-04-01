@@ -41,7 +41,7 @@ struct PaymentReportArgs {
 }
 
 #[async_trait]
-impl Worker for PaymentReportWorker {
+impl Worker<PaymentReportArgs> for PaymentReportWorker {
     // Default worker options
     fn opts() -> sidekiq::WorkerOpts<Self> {
         sidekiq::WorkerOpts::new().queue("yolo")
