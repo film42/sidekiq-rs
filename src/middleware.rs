@@ -85,6 +85,7 @@ impl Chain {
         stack.insert(index, middleware);
     }
 
+    #[inline]
     pub(crate) fn iter(&self) -> ChainIter {
         ChainIter {
             stack: self.stack.clone(),
@@ -92,6 +93,7 @@ impl Chain {
         }
     }
 
+    #[inline]
     pub(crate) async fn call(
         &mut self,
         job: &Job,

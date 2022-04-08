@@ -43,6 +43,8 @@ impl Processor {
     pub async fn process_one(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut work = self.fetch().await?;
 
+        let started = std::time::Instant::now();
+
         info!(self.logger, "sidekiq";
             "status" => "start",
             "class" => &work.job.class,
@@ -70,6 +72,7 @@ impl Processor {
         // We might need to change the ChainIter to return the final job and
         // detect any retries?
         info!(self.logger, "sidekiq";
+            "elapsed" => format!("{:?}", started.elapsed()),
             "status" => "done",
             "class" => &work.job.class,
             "queue" => &work.job.queue,
