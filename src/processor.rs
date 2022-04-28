@@ -1,4 +1,6 @@
-use crate::{Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, Worker, WorkerRef};
+use crate::{
+    cron::PeriodicJob, Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, Worker, WorkerRef,
+};
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use slog::{error, info};
 use std::collections::BTreeMap;
@@ -8,6 +10,7 @@ use std::sync::Arc;
 pub struct Processor {
     redis: Pool<RedisConnectionManager>,
     queues: Vec<String>,
+    periodic_jobs: Vec<PeriodicJob>,
     workers: BTreeMap<String, Arc<WorkerRef>>,
     logger: slog::Logger,
     chain: Chain,
@@ -22,6 +25,7 @@ impl Processor {
         Self {
             chain: Chain::new(logger.clone()),
             workers: BTreeMap::new(),
+            periodic_jobs: vec![],
 
             redis,
             logger,
@@ -93,6 +97,26 @@ impl Processor {
             .insert(W::class_name(), Arc::new(WorkerRef::wrap(Arc::new(worker))));
     }
 
+    pub(crate) async fn register_periodic(
+        &mut self,
+        periodic_job: PeriodicJob,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.periodic_jobs.push(periodic_job.clone());
+
+        let mut conn = self.redis.get().await?;
+        periodic_job.insert(&mut conn).await?;
+
+        info!(self.logger, "Inserting periodic job";
+            "args" => &periodic_job.args,
+            "class" => &periodic_job.class,
+            "queue" => &periodic_job.queue,
+            "name" => &periodic_job.name,
+            "cron" => &periodic_job.cron,
+        );
+
+        Ok(())
+    }
+
     /// Takes self to consume the processor. This is for life-cycle management, not
     /// memory safety because you can clone processor pretty easily.
     pub async fn run(self) {
@@ -128,6 +152,24 @@ impl Processor {
 
                     if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await {
                         error!(logger, "Error in scheduled poller routine: {:?}", err);
+                    }
+                }
+            }
+        });
+
+        // Watch for periodic jobs and enqueue jobs.
+        tokio::spawn({
+            let logger = self.logger.clone();
+            let redis = self.redis.clone();
+            async move {
+                let sched = Scheduled::new(redis, logger.clone());
+
+                loop {
+                    // TODO: Use process count to meet a 30 second avg.
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+
+                    if let Err(err) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
+                        error!(logger, "Error in periodic job poller routine: {:?}", err);
                     }
                 }
             }
