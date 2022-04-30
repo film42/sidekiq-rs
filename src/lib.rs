@@ -9,6 +9,8 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
+pub mod periodic;
+
 mod middleware;
 mod processor;
 mod scheduled;

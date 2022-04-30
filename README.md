@@ -54,6 +54,7 @@ impl Worker<PaymentReportArgs> for PaymentReportWorker {
 }
 ```
 
+
 ## Creating a Job
 
 There are several ways to insert a job, but for this example, we'll keep it simple. Given some worker, insert using strongly
@@ -99,6 +100,7 @@ sidekiq::perform_async(
 
 See more examples in `examples/demo.rs`.
 
+
 ## Starting the Server
 
 Below is an example of how you should create a `Processor`, register workers, include any
@@ -126,6 +128,48 @@ p.using(FilterExpiredUsersMiddleware::new(logger.clone()))
 // Start the server
 p.run().await;
 ```
+
+
+## Periodic Jobs
+
+Periodic cron jobs are supported out of the box. All you need to specify is a valid
+cron string and a worker instance. You can optionally supply arguments, a queue, a
+retry flag, and a name that will be logged when a worker is submitted.
+
+Example:
+
+```rust
+// Clear out all periodic jobs and their schedules
+periodic::destroy_all(redis).await?;
+
+// Add a new periodic job
+periodic::builder("0 0 8 * * *")?
+    .name("Email clients with an oustanding balance daily at 8am UTC")
+    .queue("reminders")
+    .args(EmailReminderArgs {
+        report_type: "outstanding_balance",
+    })?
+    .register(&mut p, EmailReminderWorker)
+    .await?;
+```
+
+Periodic jobs are not removed automatically. If your project adds a periodic job and
+then later removes the `periodic::builder` call, the periodic job will still exist in
+redis. You can call `periodic::destroy_all(redis).await?` at the start of your program
+to ensure only the periodic jobs added by the latest version of your program will be 
+executed.
+
+The implementation relies on a sorted set in redis. It stores a json payload of the
+periodic job with a score equal to the next scheduled UTC time of the cron string. All
+processes will periodically poll for changes and atomically update the score to the new
+next scheduled UTC time for the cron string. The worker that successfully changes the
+score atomically will enqueue a new job. Processes that don't successfully update the 
+score will move on. This implementation detail means periodic jobs never leave redis.
+Another detail is that json when decoded and then encoded might not produce the same
+value as the original string. Ex: `{"a":"b","c":"d"}` might become `{"c":"d","a":b"}`.
+To keep the json representation consistent, when updating a periodic job with its new
+score in redis, the original json string will be used again to keep things consistent.
+
 
 ## Server Middleware
 
@@ -191,6 +235,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
     }
 }
 ```
+
 
 ## License
 

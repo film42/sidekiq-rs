@@ -1,4 +1,4 @@
-use crate::UnitOfWork;
+use crate::{periodic::PeriodicJob, UnitOfWork};
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use slog::debug;
 
@@ -35,6 +35,38 @@ impl Scheduled {
 
                     work.enqueue_direct(&mut redis).await?;
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn enqueue_periodic_jobs(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = self.redis.get().await?;
+
+        let periodic_jobs: Vec<String> = conn
+            .zrangebyscore_limit("periodic", "-inf", now.timestamp(), 0, 100)
+            .await?;
+
+        for periodic_job in periodic_jobs {
+            let pj = PeriodicJob::from_periodic_job_string(periodic_job.clone())?;
+
+            if pj.update(&mut conn, &periodic_job).await? {
+                let job = pj.into_job();
+                let work = UnitOfWork::from_job(job);
+
+                debug!(self.logger, "Enqueueing periodic job";
+                    "args" => &pj.args,
+                    "class" => &work.job.class,
+                    "queue" => &work.queue,
+                    "name" => &pj.name,
+                    "cron" => &pj.cron,
+                );
+
+                work.enqueue_direct(&mut conn).await?;
             }
         }
 

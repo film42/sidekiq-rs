@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use serde::{Deserialize, Serialize};
-use sidekiq::{ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker, WorkerRef};
+use sidekiq::{
+    periodic, ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker, WorkerRef,
+};
 use slog::{error, info, o, Drain};
 use std::sync::Arc;
 
@@ -175,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Sidekiq server
     let mut p = Processor::new(
-        redis,
+        redis.clone(),
         logger.clone(),
         vec!["yolo".to_string(), "brolo".to_string()],
     );
@@ -187,6 +189,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Custom Middlewares
     p.using(FilterExpiredUsersMiddleware::new(logger.clone()))
         .await;
+
+    // Reset cron jobs
+    periodic::destroy_all(redis.clone()).await?;
+
+    // Cron jobs
+    periodic::builder("0 * * * * *")?
+        .name("Payment report processing for a random user")
+        .queue("yolo")
+        .args(PaymentReportArgs {
+            user_guid: "USR-123-PERIODIC".to_string(),
+        })?
+        .register(&mut p, PaymentReportWorker::new(logger.clone()))
+        .await?;
 
     p.run().await;
     Ok(())
