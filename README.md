@@ -156,7 +156,7 @@ periodic::builder("0 0 8 * * *")?
 Periodic jobs are not removed automatically. If your project adds a periodic job and
 then later removes the `periodic::builder` call, the periodic job will still exist in
 redis. You can call `periodic::destroy_all(redis).await?` at the start of your program
-to ensure only the periodic jobs adding by the latest version of your program will be 
+to ensure only the periodic jobs added by the latest version of your program will be 
 executed.
 
 The implementation relies on a sorted set in redis. It stores a json payload of the
