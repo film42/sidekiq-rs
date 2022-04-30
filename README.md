@@ -153,16 +153,22 @@ periodic::builder("0 0 8 * * *")?
     .await?;
 ```
 
-The implementation relies on a sorted set in memory. It stores a json payload of the
-periodic job with a score set to the next scheduled UTC time of the cron string. All
+Periodic jobs are not removed automatically. If your project adds a periodic job and
+then later removes the `periodic::builder` call, the periodic job will still exist in
+redis. You can call `periodic::destroy_all(redis).await?` at the start of your program
+to ensure only the periodic jobs adding by the latest version of your program will be 
+executed.
+
+The implementation relies on a sorted set in redis. It stores a json payload of the
+periodic job with a score equal to the next scheduled UTC time of the cron string. All
 clients will periodically poll for changes and atomically update the score to the new
-next scheduled UTC time of the cron string. The worker that successfully changes the
-score atomically will enqueue a new job. Processes that don't atomically update the 
+next scheduled UTC time for the cron string. The worker that successfully changes the
+score atomically will enqueue a new job. Processes that don't successfully update the 
 score will move on. This implementation detail means periodic jobs never leave redis.
-Another detail is that json is not safe to use as a unique key because order is not
-guaranteed between different library implementations, so once a periodic job is 
-inserted into redis, all update calls will always uses the original jsonified. This
-removes the fear of using json as a unique value.
+Another detail is that json when decoded and then encoded might not produce the same
+value as the original string. Ex: `{"a":"b","c":"d"}` might become `{"c":"d","a":b"}`.
+To keep the json representation consistent, when updating a periodic job with its new
+score in redis, the original json string will be used again to keep things consistent.
 
 
 ## Server Middleware
