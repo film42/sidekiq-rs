@@ -158,12 +158,17 @@ periodic job with a score set to the next scheduled UTC time of the cron string.
 clients will periodically poll for changes and atomically update the score to the new
 next scheduled UTC time of the cron string. The worker that successfully changes the
 score atomically will enqueue a new job. Processes that don't atomically update the 
-score will move on. This implementation means periodic jobs never leave redis.
+score will move on. This implementation detail means periodic jobs never leave redis.
+Another detail is that json is not safe to use as a unique key because order is not
+guaranteed between different library implementations, so once a periodic job is 
+inserted into redis, all update calls will always uses the original jsonified. This
+removes the fear of using json as a unique value.
 
 
 ## Server Middleware
 
-One great feature of sidekiq is its middleware pattern. This library reimplements the
+One great feature of sidekiq is its middleware patternoriginal jsonif. This
+removes the fear of using json as a unique value.
 sidekiq server middleware pattern in rust. In the example below supposes you have an
 app that performs work only for paying customers. The middleware below will hault jobs
 from being executed if the customers have expired. One thing kind of interesting about
