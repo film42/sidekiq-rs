@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use serde::{Deserialize, Serialize};
-use sidekiq::{cron, ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker, WorkerRef};
+use sidekiq::{
+    periodic, ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker, WorkerRef,
+};
 use slog::{error, info, o, Drain};
 use std::sync::Arc;
 
@@ -189,10 +191,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
 
     // Reset cron jobs
-    cron::destroy_all(redis.clone()).await?;
+    periodic::destroy_all(redis.clone()).await?;
 
     // Cron jobs
-    cron::builder("0 * * * * *")?
+    periodic::builder("0 * * * * *")?
         .name("Payment report processing for a random user")
         .queue("yolo")
         .args(PaymentReportArgs {

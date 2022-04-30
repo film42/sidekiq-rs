@@ -1,5 +1,5 @@
 use crate::{
-    cron::PeriodicJob, Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, Worker, WorkerRef,
+    periodic::PeriodicJob, Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, Worker, WorkerRef,
 };
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use slog::{error, info};

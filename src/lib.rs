@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
-pub mod cron;
+pub mod periodic;
 
 mod middleware;
 mod processor;

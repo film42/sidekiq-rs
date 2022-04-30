@@ -1,4 +1,4 @@
-use crate::{cron::PeriodicJob, UnitOfWork};
+use crate::{periodic::PeriodicJob, UnitOfWork};
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use slog::debug;
 
