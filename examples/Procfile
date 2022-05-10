@@ -1,0 +1,9 @@
+worker1: cargo run --offline --release --example demo
+worker2: cargo run --offline --release --example demo
+worker3: cargo run --offline --release --example demo
+worker4: cargo run --offline --release --example demo
+worker5: cargo run --offline --release --example demo
+worker6: cargo run --offline --release --example demo
+worker7: cargo run --offline --release --example demo
+worker8: cargo run --offline --release --example demo
+worker9: cargo run --offline --release --example demo

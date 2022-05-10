@@ -36,54 +36,66 @@ impl Processor {
         }
     }
 
-    async fn fetch(&mut self) -> Result<UnitOfWork, Box<dyn std::error::Error>> {
-        let (queue, job_raw): (String, String) =
-            self.redis.get().await?.brpop(&self.queues, 0).await?;
-        let job: Job = serde_json::from_str(&job_raw)?;
-        // println!("{:?}", (&queue, &args));
-        Ok(UnitOfWork { queue, job })
+    async fn fetch(&mut self) -> Result<Option<UnitOfWork>, Box<dyn std::error::Error>> {
+        let response: Option<(String, String)> =
+            self.redis.get().await?.brpop(&self.queues, 2).await?;
+
+        if let Some((queue, job_raw)) = response {
+            let job: Job = serde_json::from_str(&job_raw)?;
+            // println!("{:?}", (&queue, &args));
+            return Ok(Some(UnitOfWork { queue, job }));
+        }
+
+        Ok(None)
     }
 
     pub async fn process_one(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut work = self.fetch().await?;
+        loop {
+            let work = self.fetch().await?;
 
-        let started = std::time::Instant::now();
+            if work.is_none() {
+                continue;
+            }
+            let mut work = work.expect("polled and found some work");
 
-        info!(self.logger, "sidekiq";
-            "status" => "start",
-            "class" => &work.job.class,
-            "queue" => &work.job.queue,
-            "jid" => &work.job.jid
-        );
+            let started = std::time::Instant::now();
 
-        if let Some(worker) = self.workers.get_mut(&work.job.class) {
-            self.chain
-                .call(&work.job, worker.clone(), self.redis.clone())
-                .await?;
-        } else {
-            error!(
-                self.logger,
-                "!!! Worker not found !!!";
-                "staus" => "fail",
+            info!(self.logger, "sidekiq";
+                "status" => "start",
+                "class" => &work.job.class,
+                "queue" => &work.job.queue,
+                "jid" => &work.job.jid
+            );
+
+            if let Some(worker) = self.workers.get_mut(&work.job.class) {
+                self.chain
+                    .call(&work.job, worker.clone(), self.redis.clone())
+                    .await?;
+            } else {
+                error!(
+                    self.logger,
+                    "!!! Worker not found !!!";
+                    "staus" => "fail",
+                    "class" => &work.job.class,
+                    "queue" => &work.job.queue,
+                    "jid" => &work.job.jid,
+                );
+                work.reenqueue(&mut self.redis).await?;
+            }
+
+            // TODO: Make this only say "done" when the job is successful.
+            // We might need to change the ChainIter to return the final job and
+            // detect any retries?
+            info!(self.logger, "sidekiq";
+                "elapsed" => format!("{:?}", started.elapsed()),
+                "status" => "done",
                 "class" => &work.job.class,
                 "queue" => &work.job.queue,
                 "jid" => &work.job.jid,
             );
-            work.reenqueue(&mut self.redis).await?;
+
+            return Ok(());
         }
-
-        // TODO: Make this only say "done" when the job is successful.
-        // We might need to change the ChainIter to return the final job and
-        // detect any retries?
-        info!(self.logger, "sidekiq";
-            "elapsed" => format!("{:?}", started.elapsed()),
-            "status" => "done",
-            "class" => &work.job.class,
-            "queue" => &work.job.queue,
-            "jid" => &work.job.jid,
-        );
-
-        Ok(())
     }
 
     pub fn register<

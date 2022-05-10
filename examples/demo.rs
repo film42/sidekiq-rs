@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sidekiq::{
     periodic, ChainIter, Job, Processor, ServerMiddleware, ServerResult, Worker, WorkerRef,
 };
@@ -114,6 +115,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
     let mut redis = Pool::builder().build(manager).await?;
 
+    tokio::spawn({
+        let mut redis = redis.clone();
+
+        async move {
+            loop {
+                PaymentReportWorker::perform_async(
+                    &mut redis,
+                    PaymentReportArgs {
+                        user_guid: "USR-123".into(),
+                    },
+                )
+                .await
+                .unwrap();
+
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+    });
+
     // Enqueue a job with the worker! There are many ways to do this.
     PaymentReportWorker::perform_async(
         &mut redis,
@@ -197,9 +217,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     periodic::builder("0 * * * * *")?
         .name("Payment report processing for a random user")
         .queue("yolo")
-        .args(PaymentReportArgs {
-            user_guid: "USR-123-PERIODIC".to_string(),
-        })?
+        //.args(PaymentReportArgs {
+        //    user_guid: "USR-123-PERIODIC".to_string(),
+        //})?
+        .args(json!({ "user_guid": "USR-123-PERIODIC" }))?
         .register(&mut p, PaymentReportWorker::new(logger.clone()))
         .await?;
 
