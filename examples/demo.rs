@@ -215,12 +215,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Cron jobs
     periodic::builder("0 * * * * *")?
-        .name("Payment report processing for a random user")
+        .name("Payment report processing for a user using json args")
         .queue("yolo")
-        //.args(PaymentReportArgs {
-        //    user_guid: "USR-123-PERIODIC".to_string(),
-        //})?
-        .args(json!({ "user_guid": "USR-123-PERIODIC" }))?
+        .args(json!({ "user_guid": "USR-123-PERIODIC-FROM-JSON-ARGS" }))?
+        .register(&mut p, PaymentReportWorker::new(logger.clone()))
+        .await?;
+
+    periodic::builder("0 * * * * *")?
+        .name("Payment report processing for a user using typed args")
+        .queue("yolo")
+        .args(PaymentReportArgs {
+            user_guid: "USR-123-PERIODIC-FROM-TYPED-ARGS".to_string(),
+        })?
         .register(&mut p, PaymentReportWorker::new(logger.clone()))
         .await?;
 

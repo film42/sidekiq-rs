@@ -27,7 +27,7 @@ pub struct ChainIter {
 }
 
 impl ChainIter {
-    //#[inline]
+    #[inline]
     pub async fn next(
         &self,
         job: &Job,
