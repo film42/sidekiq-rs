@@ -27,6 +27,7 @@ pub struct ChainIter {
 }
 
 impl ChainIter {
+    #[inline]
     pub async fn next(
         &self,
         job: &Job,
@@ -112,6 +113,7 @@ struct HandlerMiddleware;
 
 #[async_trait]
 impl ServerMiddleware for HandlerMiddleware {
+    #[inline]
     async fn call(
         &self,
         _chain: ChainIter,
@@ -135,6 +137,7 @@ impl RetryMiddleware {
 
 #[async_trait]
 impl ServerMiddleware for RetryMiddleware {
+    #[inline]
     async fn call(
         &self,
         chain: ChainIter,

@@ -6,6 +6,12 @@ use slog::{error, info};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub enum WorkFetcher {
+    NoWorkFound,
+    Done,
+}
+
 #[derive(Clone)]
 pub struct Processor {
     redis: Pool<RedisConnectionManager>,
@@ -36,16 +42,38 @@ impl Processor {
         }
     }
 
-    async fn fetch(&mut self) -> Result<UnitOfWork, Box<dyn std::error::Error>> {
-        let (queue, job_raw): (String, String) =
-            self.redis.get().await?.brpop(&self.queues, 0).await?;
-        let job: Job = serde_json::from_str(&job_raw)?;
-        // println!("{:?}", (&queue, &args));
-        Ok(UnitOfWork { queue, job })
+    async fn fetch(&mut self) -> Result<Option<UnitOfWork>, Box<dyn std::error::Error>> {
+        let response: Option<(String, String)> =
+            self.redis.get().await?.brpop(&self.queues, 2).await?;
+
+        if let Some((queue, job_raw)) = response {
+            let job: Job = serde_json::from_str(&job_raw)?;
+            // println!("{:?}", (&queue, &args));
+            return Ok(Some(UnitOfWork { queue, job }));
+        }
+
+        Ok(None)
     }
 
     pub async fn process_one(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut work = self.fetch().await?;
+        loop {
+            if let WorkFetcher::NoWorkFound = self.process_one_tick_once().await? {
+                continue;
+            }
+
+            return Ok(());
+        }
+    }
+
+    pub async fn process_one_tick_once(
+        &mut self,
+    ) -> Result<WorkFetcher, Box<dyn std::error::Error>> {
+        let work = self.fetch().await?;
+
+        if work.is_none() {
+            return Ok(WorkFetcher::NoWorkFound);
+        }
+        let mut work = work.expect("polled and found some work");
 
         let started = std::time::Instant::now();
 
@@ -83,7 +111,7 @@ impl Processor {
             "jid" => &work.job.jid,
         );
 
-        Ok(())
+        Ok(WorkFetcher::Done)
     }
 
     pub fn register<
