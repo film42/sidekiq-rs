@@ -168,7 +168,8 @@ impl PeriodicJob {
         if let Some(next_scheduled_time) = self.next_scheduled_time() {
             // [ZADD key CH score value] will return true/ false if the value added changed
             // when we submit it to redis. We can use this to determine if we were the lucky
-            // process that changed the periodic job to its next scheduled time.
+            // process that changed the periodic job to its next scheduled time and enqueue
+            // the job.
             return Ok(redis::cmd("ZADD")
                 .arg("periodic")
                 .arg("CH")

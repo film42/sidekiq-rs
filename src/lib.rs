@@ -17,7 +17,7 @@ mod scheduled;
 
 // Re-export
 pub use middleware::{ChainIter, ServerMiddleware, ServerResult};
-pub use processor::Processor;
+pub use processor::{Processor, WorkFetcher};
 pub use scheduled::Scheduled;
 
 pub fn opts() -> EnqueueOpts {

@@ -6,6 +6,12 @@ use slog::{error, info};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub enum WorkFetcher {
+    NoWorkFound,
+    Done,
+}
+
 #[derive(Clone)]
 pub struct Processor {
     redis: Pool<RedisConnectionManager>,
@@ -51,51 +57,61 @@ impl Processor {
 
     pub async fn process_one(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         loop {
-            let work = self.fetch().await?;
-
-            if work.is_none() {
+            if let WorkFetcher::NoWorkFound = self.process_one_tick_once().await? {
                 continue;
             }
-            let mut work = work.expect("polled and found some work");
 
-            let started = std::time::Instant::now();
+            return Ok(());
+        }
+    }
 
-            info!(self.logger, "sidekiq";
-                "status" => "start",
-                "class" => &work.job.class,
-                "queue" => &work.job.queue,
-                "jid" => &work.job.jid
-            );
+    pub async fn process_one_tick_once(
+        &mut self,
+    ) -> Result<WorkFetcher, Box<dyn std::error::Error>> {
+        let work = self.fetch().await?;
 
-            if let Some(worker) = self.workers.get_mut(&work.job.class) {
-                self.chain
-                    .call(&work.job, worker.clone(), self.redis.clone())
-                    .await?;
-            } else {
-                error!(
-                    self.logger,
-                    "!!! Worker not found !!!";
-                    "staus" => "fail",
-                    "class" => &work.job.class,
-                    "queue" => &work.job.queue,
-                    "jid" => &work.job.jid,
-                );
-                work.reenqueue(&mut self.redis).await?;
-            }
+        if work.is_none() {
+            return Ok(WorkFetcher::NoWorkFound);
+        }
+        let mut work = work.expect("polled and found some work");
 
-            // TODO: Make this only say "done" when the job is successful.
-            // We might need to change the ChainIter to return the final job and
-            // detect any retries?
-            info!(self.logger, "sidekiq";
-                "elapsed" => format!("{:?}", started.elapsed()),
-                "status" => "done",
+        let started = std::time::Instant::now();
+
+        info!(self.logger, "sidekiq";
+            "status" => "start",
+            "class" => &work.job.class,
+            "queue" => &work.job.queue,
+            "jid" => &work.job.jid
+        );
+
+        if let Some(worker) = self.workers.get_mut(&work.job.class) {
+            self.chain
+                .call(&work.job, worker.clone(), self.redis.clone())
+                .await?;
+        } else {
+            error!(
+                self.logger,
+                "!!! Worker not found !!!";
+                "staus" => "fail",
                 "class" => &work.job.class,
                 "queue" => &work.job.queue,
                 "jid" => &work.job.jid,
             );
-
-            return Ok(());
+            work.reenqueue(&mut self.redis).await?;
         }
+
+        // TODO: Make this only say "done" when the job is successful.
+        // We might need to change the ChainIter to return the final job and
+        // detect any retries?
+        info!(self.logger, "sidekiq";
+            "elapsed" => format!("{:?}", started.elapsed()),
+            "status" => "done",
+            "class" => &work.job.class,
+            "queue" => &work.job.queue,
+            "jid" => &work.job.jid,
+        );
+
+        Ok(WorkFetcher::Done)
     }
 
     pub fn register<
