@@ -150,6 +150,18 @@ impl RedisConnection {
             .await?)
     }
 
+    pub async fn zrange(
+        &mut self,
+        key: String,
+        lower: isize,
+        upper: isize,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        Ok(self
+            .connection
+            .zrange(self.namespaced_key(key), lower, upper)
+            .await?)
+    }
+
     pub async fn zrangebyscore_limit<L: ToRedisArgs + Send + Sync, U: ToRedisArgs + Sync + Send>(
         &mut self,
         key: String,

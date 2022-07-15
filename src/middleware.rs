@@ -181,7 +181,8 @@ impl ServerMiddleware for RetryMiddleware {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::Worker;
+    use crate::{RedisConnectionManager, RedisPool, Worker};
+    use bb8::Pool;
     use tokio::sync::Mutex;
 
     async fn redis() -> RedisPool {
