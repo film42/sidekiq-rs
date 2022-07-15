@@ -16,7 +16,9 @@ mod redis;
 mod scheduled;
 
 // Re-export
-pub use crate::redis::{RedisConnection, RedisConnectionManager, RedisPool};
+pub use crate::redis::{
+    with_custom_namespace, RedisConnection, RedisConnectionManager, RedisError, RedisPool,
+};
 pub use middleware::{ChainIter, ServerMiddleware, ServerResult};
 pub use processor::{Processor, WorkFetcher};
 pub use scheduled::Scheduled;
