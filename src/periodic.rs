@@ -1,5 +1,4 @@
-use crate::{new_jid, Job, Processor, Worker};
-use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
+use crate::{new_jid, Job, Processor, RedisConnection, RedisPool, Worker};
 pub use cron_clock::{Schedule as Cron, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -9,11 +8,9 @@ pub fn parse(cron: &str) -> Result<Cron, Box<dyn std::error::Error>> {
     Ok(Cron::from_str(cron)?)
 }
 
-pub async fn destroy_all(
-    redis: Pool<RedisConnectionManager>,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn destroy_all(redis: RedisPool) -> Result<(), Box<dyn std::error::Error>> {
     let mut conn = redis.get().await?;
-    conn.del("periodic").await?;
+    conn.del("periodic".to_string()).await?;
     Ok(())
 }
 
@@ -154,7 +151,7 @@ impl PeriodicJob {
 
     pub async fn insert(
         &self,
-        conn: &mut redis::aio::Connection,
+        conn: &mut RedisConnection,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let payload = serde_json::to_string(self)?;
         self.update(conn, &payload).await
@@ -162,7 +159,7 @@ impl PeriodicJob {
 
     pub async fn update(
         &self,
-        conn: &mut redis::aio::Connection,
+        conn: &mut RedisConnection,
         periodic_job_str: &str,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         if let Some(next_scheduled_time) = self.next_scheduled_time() {
@@ -175,7 +172,7 @@ impl PeriodicJob {
                 .arg("CH")
                 .arg(next_scheduled_time)
                 .arg(periodic_job_str)
-                .query_async(&mut *conn)
+                .query_async(conn.borrow_mut())
                 .await?);
         }
 

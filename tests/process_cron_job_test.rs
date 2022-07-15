@@ -12,7 +12,7 @@ mod test {
     }
 
     #[async_trait]
-    impl FlushAll for Pool<RedisConnectionManager> {
+    impl FlushAll for RedisPool {
         async fn flushall(&self) {
             let mut conn = self.get().await.unwrap();
             let _: String = redis::cmd("FLUSHALL")
@@ -24,7 +24,7 @@ mod test {
 
     async fn new_base_processor(
         queue: String,
-    ) -> (Processor, Pool<RedisConnectionManager>, slog::Logger) {
+    ) -> (Processor, RedisPool, slog::Logger) {
         // Logger
         let decorator = slog_term::PlainSyncDecorator::new(std::io::stdout());
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
@@ -41,7 +41,7 @@ mod test {
         (p, redis, logger)
     }
 
-    async fn set_cron_scores_to_zero(redis: Pool<RedisConnectionManager>) {
+    async fn set_cron_scores_to_zero(redis: RedisPool) {
         let mut conn = redis.get().await.unwrap();
 
         let jobs: Vec<String> = redis::cmd("ZRANGE")

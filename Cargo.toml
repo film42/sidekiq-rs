@@ -21,7 +21,7 @@ redis = { version = "0.21", features = ["aio", "default", "tokio-comp"] }
 async-trait = "0.1"
 slog = "2.7"
 slog-term = "2.9"
-bb8-redis = "0.10"
+bb8 = "0.7"
 num_cpus = "1.13"
 chrono = "0.4"
 rand = "0.8"

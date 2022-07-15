@@ -1,6 +1,5 @@
-use crate::{Job, UnitOfWork, WorkerRef};
+use crate::{Job, RedisPool, UnitOfWork, WorkerRef};
 use async_trait::async_trait;
-use bb8_redis::{bb8::Pool, RedisConnectionManager};
 use slog::error;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -14,7 +13,7 @@ pub trait ServerMiddleware {
         iter: ChainIter,
         job: &Job,
         worker: Arc<WorkerRef>,
-        redis: Pool<RedisConnectionManager>,
+        redis: RedisPool,
     ) -> ServerResult;
 }
 
@@ -28,12 +27,7 @@ pub struct ChainIter {
 
 impl ChainIter {
     #[inline]
-    pub async fn next(
-        &self,
-        job: &Job,
-        worker: Arc<WorkerRef>,
-        redis: Pool<RedisConnectionManager>,
-    ) -> ServerResult {
+    pub async fn next(&self, job: &Job, worker: Arc<WorkerRef>, redis: RedisPool) -> ServerResult {
         let stack = self.stack.read().await;
 
         if let Some(ref middleware) = stack.get(self.index) {
@@ -99,7 +93,7 @@ impl Chain {
         &mut self,
         job: &Job,
         worker: Arc<WorkerRef>,
-        redis: Pool<RedisConnectionManager>,
+        redis: RedisPool,
     ) -> ServerResult {
         // The middleware must call bottom of the stack to the top.
         // Each middleware should receive a lambda to the next middleware
@@ -119,7 +113,7 @@ impl ServerMiddleware for HandlerMiddleware {
         _chain: ChainIter,
         job: &Job,
         worker: Arc<WorkerRef>,
-        _redis: Pool<RedisConnectionManager>,
+        _redis: RedisPool,
     ) -> ServerResult {
         worker.call(job.args.clone()).await
     }
@@ -143,7 +137,7 @@ impl ServerMiddleware for RetryMiddleware {
         chain: ChainIter,
         job: &Job,
         worker: Arc<WorkerRef>,
-        mut redis: Pool<RedisConnectionManager>,
+        mut redis: RedisPool,
     ) -> ServerResult {
         let max_retries = worker.max_retries();
 
@@ -190,7 +184,7 @@ mod test {
     use crate::Worker;
     use tokio::sync::Mutex;
 
-    async fn redis() -> Pool<RedisConnectionManager> {
+    async fn redis() -> RedisPool {
         let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
         Pool::builder().build(manager).await.unwrap()
     }
