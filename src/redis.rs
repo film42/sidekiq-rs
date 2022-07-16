@@ -1,4 +1,4 @@
-use bb8::{CustomizeConnection, ManageConnection, Pool, PooledConnection};
+use bb8::{CustomizeConnection, ManageConnection, Pool};
 
 use async_trait::async_trait;
 use redis::AsyncCommands;
@@ -58,7 +58,7 @@ impl ManageConnection for RedisConnectionManager {
         ))
     }
 
-    async fn is_valid(&self, conn: &mut PooledConnection<'_, Self>) -> Result<(), Self::Error> {
+    async fn is_valid(&self, mut conn: &mut Self::Connection) -> Result<(), Self::Error> {
         let pong: String = redis::cmd("PING")
             .query_async(&mut conn.deref_mut().connection)
             .await?;
