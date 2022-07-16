@@ -455,6 +455,55 @@ impl UnitOfWork {
 mod test {
     use super::*;
 
+    mod my {
+        pub mod cool {
+            pub mod workers {
+                use super::super::super::super::*;
+
+                pub struct TestModuleWorker;
+
+                #[async_trait]
+                impl Worker<()> for TestModuleWorker {
+                    async fn perform(&self, _args: ()) -> ServerResult {
+                        Ok(())
+                    }
+                }
+
+                pub struct TestCustomClassNameWorker;
+
+                #[async_trait]
+                impl Worker<()> for TestCustomClassNameWorker {
+                    async fn perform(&self, _args: ()) -> ServerResult {
+                        Ok(())
+                    }
+
+                    fn class_name() -> String
+                    where
+                        Self: Sized,
+                    {
+                        "My::Cool::Workers::TestCustomClassNameWorker".to_string()
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ignores_modules_in_ruby_worker_name() {
+        assert_eq!(
+            my::cool::workers::TestModuleWorker::class_name(),
+            "TestModuleWorker".to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn supports_custom_class_name_for_workers() {
+        assert_eq!(
+            my::cool::workers::TestCustomClassNameWorker::class_name(),
+            "My::Cool::Workers::TestCustomClassNameWorker".to_string()
+        );
+    }
+
     #[derive(Deserialize, Serialize, Debug)]
     struct TestArg {
         name: String,

@@ -6,7 +6,7 @@ use sidekiq::{
     periodic, ChainIter, Job, Processor, RedisConnectionManager, RedisPool, ServerMiddleware,
     ServerResult, Worker, WorkerRef,
 };
-use slog::{error, info, o, Drain};
+use slog::{debug, error, info, o, Drain};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -23,11 +23,12 @@ impl Worker<()> for HelloWorker {
 #[derive(Clone)]
 struct PaymentReportWorker {
     logger: slog::Logger,
+    redis: RedisPool,
 }
 
 impl PaymentReportWorker {
-    fn new(logger: slog::Logger) -> Self {
-        Self { logger }
+    fn new(logger: slog::Logger, redis: RedisPool) -> Self {
+        Self { logger, redis }
     }
 
     async fn send_report(&self, user_guid: String) -> Result<(), Box<dyn std::error::Error>> {
@@ -50,6 +51,18 @@ impl Worker<PaymentReportArgs> for PaymentReportWorker {
     }
 
     async fn perform(&self, args: PaymentReportArgs) -> Result<(), Box<dyn std::error::Error>> {
+        use redis::AsyncCommands;
+
+        let times_called: usize = self
+            .redis
+            .get()
+            .await?
+            .unnamespaced_borrow_mut()
+            .incr("example_of_accessing_the_raw_redis_connection", 1)
+            .await?;
+
+        debug!(self.logger, "Called this worker"; "times_called" => times_called);
+
         self.send_report(args.user_guid).await
     }
 }
@@ -205,7 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Add known workers
     p.register(HelloWorker);
-    p.register(PaymentReportWorker::new(logger.clone()));
+    p.register(PaymentReportWorker::new(logger.clone(), redis.clone()));
 
     // Custom Middlewares
     p.using(FilterExpiredUsersMiddleware::new(logger.clone()))
@@ -219,7 +232,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .name("Payment report processing for a user using json args")
         .queue("yolo")
         .args(json!({ "user_guid": "USR-123-PERIODIC-FROM-JSON-ARGS" }))?
-        .register(&mut p, PaymentReportWorker::new(logger.clone()))
+        .register(
+            &mut p,
+            PaymentReportWorker::new(logger.clone(), redis.clone()),
+        )
         .await?;
 
     periodic::builder("0 * * * * *")?
@@ -228,7 +244,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .args(PaymentReportArgs {
             user_guid: "USR-123-PERIODIC-FROM-TYPED-ARGS".to_string(),
         })?
-        .register(&mut p, PaymentReportWorker::new(logger.clone()))
+        .register(
+            &mut p,
+            PaymentReportWorker::new(logger.clone(), redis.clone()),
+        )
         .await?;
 
     p.run().await;

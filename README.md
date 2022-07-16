@@ -236,6 +236,96 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
 }
 ```
 
+## Customization Details
+
+### Namespacing the workers
+
+It's still very common to use the `redis-namespace` gem with ruby sidekiq workers. This library
+supports namespacing redis commands by using a connection customizer when you build the connection
+pool.
+
+```rust
+let manager = sidekiq::RedisConnectionManager::new("redis://127.0.0.1/")?;
+let redis = bb8::Pool::builder()
+    .connection_customizer(sidekiq::with_custom_namespace("my_cool_app".to_string()))
+    .build(manager)
+    .await?;
+```
+
+Now all commands used by this library will be prefixed with `my_cool_app:`, example: `ZDEL my_cool_app:scheduled {...}`.
+
+### Passing database connections into the workers
+
+Workers will often need access to other software components like database connections, http clients,
+etc. You can define these on your worker struct so long as they implement `Clone`. Example:
+
+```rust
+#[derive(Clone)]
+struct ExampleWorker {
+    redis: RedisPool,
+}
+
+
+#[async_trait]
+impl Worker<()> for ExampleWorker {
+    async fn perform(&self, args: PaymentReportArgs) -> Result<(), Box<dyn std::error::Error>> {
+        use redis::AsyncCommands;
+
+        // And then they are available here...
+        let times_called: usize = self
+            .redis
+            .get()
+            .await?
+            .unnamespaced_borrow_mut()
+            .incr("example_of_accessing_the_raw_redis_connection", 1)
+            .await?;
+
+        debug!(self.logger, "Called this worker"; "times_called" => times_called);
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+// ...
+    let mut p = Processor::new(
+        redis.clone(),
+        logger.clone(),
+        vec!["low_priority".to_string()],
+    );
+
+    p.register(ExampleWorker{ redis: redis.clone() });
+}
+```
+
+### Customizing the worker name for workers under a nested ruby module
+
+You mind find that your worker under a module does not match with a ruby worker under a module.
+A nested rusty-sidekiq worker `workers::MyWorker` will only keep the final type name `MyWorker` when
+registering the worker for some "class name". Meaning, if a ruby worker is enqueued with the class
+`Workers::MyWorker`, the `workers::MyWorker` type will not process that work. This is because by default
+the class name is generated at compile time based on the worker struct name. To override this, redefine one
+of the default trait methods:
+
+```rust
+pub struct MyWorker;
+
+#[async_trait]
+impl Worker<()> for MyWorker {
+    async fn perform(&self, _args: ()) -> ServerResult {
+        Ok(())
+    }
+
+    fn class_name() -> String
+    where
+        Self: Sized,
+    {
+        "Workers::MyWorker".to_string()
+    }
+}
+```
+
+And now when ruby enqueues a `Workers::MyWorker` job, it will be picked up by rust-sidekiq.
+
 
 ## License
 
