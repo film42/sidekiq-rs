@@ -399,7 +399,7 @@ impl UnitOfWork {
         job.enqueued_at = Some(chrono::Utc::now().timestamp() as f64);
 
         redis
-            .rpush(self.queue.clone(), serde_json::to_string(&job)?)
+            .lpush(self.queue.clone(), serde_json::to_string(&job)?)
             .await?;
         Ok(())
     }
