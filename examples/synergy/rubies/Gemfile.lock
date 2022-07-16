@@ -4,6 +4,8 @@ GEM
     connection_pool (2.2.5)
     rack (2.2.4)
     redis (4.7.1)
+    redis-namespace (1.8.2)
+      redis (>= 3.0.4)
     sidekiq (6.5.1)
       connection_pool (>= 2.2.2)
       rack (~> 2.0)
@@ -13,6 +15,7 @@ PLATFORMS
   x86_64-linux
 
 DEPENDENCIES
+  redis-namespace
   sidekiq
 
 BUNDLED WITH

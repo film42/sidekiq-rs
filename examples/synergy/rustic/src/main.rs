@@ -11,12 +11,14 @@ use std::sync::Arc;
 mod v2 {
     use super::*;
 
-    pub struct StatisticsWorker;
+    pub struct StatisticsWorker {
+        pub logger: slog::Logger,
+    }
 
     #[async_trait]
     impl Worker<Stats> for StatisticsWorker {
         async fn perform(&self, args: Stats) -> Result<(), Box<dyn std::error::Error>> {
-            println!("Got a metric (v2): {:?}", args);
+            info!(self.logger, "Got a metric (v2)"; "metric" => format!("{:?}", args));
 
             Ok(())
         }
@@ -26,7 +28,7 @@ mod v2 {
         where
             Self: Sized,
         {
-            sidekiq::WorkerOpts::new().queue("v2_statistics")
+            sidekiq::WorkerOpts::new().queue("ruby:v2_statistics")
         }
 
         // Set the default class name
@@ -40,7 +42,9 @@ mod v2 {
 }
 
 #[derive(Clone)]
-struct V1StatisticsWorker;
+struct V1StatisticsWorker {
+    logger: slog::Logger,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Stats {
@@ -51,7 +55,7 @@ struct Stats {
 #[async_trait]
 impl Worker<Stats> for V1StatisticsWorker {
     async fn perform(&self, args: Stats) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Got a metric (v1): {:?}", args);
+        info!(self.logger, "Got a metric (v1)"; "metric" => format!("{:?}", args));
 
         Ok(())
     }
@@ -64,39 +68,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let logger = slog::Logger::root(drain, o!());
 
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
-    let mut redis = Pool::builder().build(manager).await?;
-
-    V1StatisticsWorker::opts()
-        .queue("v1_statistics")
-        .perform_async(
-            &mut redis,
-            Stats {
-                metric: "temp.house.basement".into(),
-                value: 12.2,
-            },
-        )
+    let mut redis = Pool::builder()
+        .connection_customizer(sidekiq::with_custom_namespace("yolo_app".to_string()))
+        .build(manager)
         .await?;
 
-    v2::StatisticsWorker::opts()
-        .perform_async(
-            &mut redis,
-            Stats {
-                metric: "temp.house.garage".into(),
-                value: 13.37,
-            },
-        )
-        .await?;
+    tokio::spawn({
+        let mut redis = redis.clone();
+
+        async move {
+            loop {
+                V1StatisticsWorker::opts()
+                    .queue("ruby:v1_statistics")
+                    .perform_async(
+                        &mut redis,
+                        Stats {
+                            metric: "temp.house.basement".into(),
+                            value: 12.2,
+                        },
+                    )
+                    .await
+                    .unwrap();
+
+                v2::StatisticsWorker::opts()
+                    .perform_async(
+                        &mut redis,
+                        Stats {
+                            metric: "temp.house.garage".into(),
+                            value: 13.37,
+                        },
+                    )
+                    .await
+                    .unwrap();
+
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
+    });
 
     let mut p = Processor::new(
         redis.clone(),
         logger.clone(),
-        vec!["v1_statistics".to_string(), "v2_statistics".to_string()],
+        vec![
+            "rust:v1_statistics".to_string(),
+            "rust:v2_statistics".to_string(),
+        ],
     );
 
-    p.register(V1StatisticsWorker);
+    p.register(V1StatisticsWorker {
+        logger: logger.clone(),
+    });
 
-    p.register(v2::StatisticsWorker);
+    p.register(v2::StatisticsWorker {
+        logger: logger.clone(),
+    });
 
-    // p.run().await;
+    p.run().await;
     Ok(())
 }
