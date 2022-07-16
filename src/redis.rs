@@ -139,14 +139,14 @@ impl RedisConnection {
         Ok(self.connection.del(self.namespaced_key(key)).await?)
     }
 
-    pub async fn rpush(
+    pub async fn lpush(
         &mut self,
         key: String,
         value: String,
     ) -> Result<(), Box<dyn std::error::Error>> {
         Ok(self
             .connection
-            .rpush(self.namespaced_key(key), value)
+            .lpush(self.namespaced_key(key), value)
             .await?)
     }
 
