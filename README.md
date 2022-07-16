@@ -13,7 +13,7 @@ so it is async by default.
 ## The Worker
 
 This library uses serde to make worker arguments strongly typed as needed. Below is an example of a worker with strongly
-typed arguments. It also has custom options that will be used whenever a job is submitted. These can be overridden at 
+typed arguments. It also has custom options that will be used whenever a job is submitted. These can be overridden at
 enqueue time making it easy to change the queue name, for example, should you need to.
 
 ```rust
@@ -108,8 +108,8 @@ custom middlewares, and start the server.
 
 ```rust
 // Redis
-let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
-let mut redis = Pool::builder().build(manager).await.unwrap();
+let manager = sidekiq::RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
+let mut redis = bb8::Pool::builder().build(manager).await.unwrap();
 
 // Sidekiq server
 let mut p = Processor::new(
@@ -156,14 +156,14 @@ periodic::builder("0 0 8 * * *")?
 Periodic jobs are not removed automatically. If your project adds a periodic job and
 then later removes the `periodic::builder` call, the periodic job will still exist in
 redis. You can call `periodic::destroy_all(redis).await?` at the start of your program
-to ensure only the periodic jobs added by the latest version of your program will be 
+to ensure only the periodic jobs added by the latest version of your program will be
 executed.
 
 The implementation relies on a sorted set in redis. It stores a json payload of the
 periodic job with a score equal to the next scheduled UTC time of the cron string. All
 processes will periodically poll for changes and atomically update the score to the new
 next scheduled UTC time for the cron string. The worker that successfully changes the
-score atomically will enqueue a new job. Processes that don't successfully update the 
+score atomically will enqueue a new job. Processes that don't successfully update the
 score will move on. This implementation detail means periodic jobs never leave redis.
 Another detail is that json when decoded and then encoded might not produce the same
 value as the original string. Ex: `{"a":"b","c":"d"}` might become `{"c":"d","a":b"}`.
@@ -210,7 +210,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
         chain: ChainIter,
         job: &Job,
         worker: Arc<WorkerRef>,
-        redis: Pool<RedisConnectionManager>,
+        redis: RedisPool,
     ) -> ServerResult {
         // Use serde to check if a user_guid is part of the job args.
         let args: Result<(FiltereExpiredUsersArgs,), serde_json::Error> =

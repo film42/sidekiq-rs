@@ -1,6 +1,6 @@
 [package]
 name = "rusty-sidekiq"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "A rust sidekiq server and client using tokio"
 authors = ["Garrett Thornburg <garrett.thornburg@hey.com>"]
@@ -14,14 +14,14 @@ readme = "README.md"
 name = "sidekiq"
 
 [dependencies]
-tokio = { version = "1", features = ["full"]} 
+tokio = { version = "1", features = ["full"]}
 serde_json = { version = "1" }
 serde = { version = "1.0", features = ["derive"] }
 redis = { version = "0.21", features = ["aio", "default", "tokio-comp"] }
 async-trait = "0.1"
 slog = "2.7"
 slog-term = "2.9"
-bb8-redis = "0.10"
+bb8 = "0.7"
 num_cpus = "1.13"
 chrono = "0.4"
 rand = "0.8"

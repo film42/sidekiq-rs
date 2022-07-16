@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod test {
     use async_trait::async_trait;
-    use bb8_redis::{bb8::Pool, RedisConnectionManager};
-    use sidekiq::{Processor, WorkFetcher, Worker};
+    use bb8::Pool;
+    use sidekiq::{Processor, RedisConnectionManager, RedisPool, WorkFetcher, Worker};
     use slog::{o, Drain};
     use std::sync::{Arc, Mutex};
 
@@ -12,19 +12,17 @@ mod test {
     }
 
     #[async_trait]
-    impl FlushAll for Pool<RedisConnectionManager> {
+    impl FlushAll for RedisPool {
         async fn flushall(&self) {
             let mut conn = self.get().await.unwrap();
             let _: String = redis::cmd("FLUSHALL")
-                .query_async(&mut *conn)
+                .query_async(conn.unnamespaced_borrow_mut())
                 .await
                 .unwrap();
         }
     }
 
-    async fn new_base_processor(
-        queue: String,
-    ) -> (Processor, Pool<RedisConnectionManager>, slog::Logger) {
+    async fn new_base_processor(queue: String) -> (Processor, RedisPool, slog::Logger) {
         // Logger
         let decorator = slog_term::PlainSyncDecorator::new(std::io::stdout());
         let drain = slog_term::FullFormat::new(decorator).build().fuse();

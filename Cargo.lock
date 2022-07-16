@@ -44,17 +44,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bb8-redis"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c440295545cb69b3cec992ae8844fbb1de1c84f2f90248438af287e14bb09bde"
-dependencies = [
- "async-trait",
- "bb8",
- "redis",
-]
-
-[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -548,10 +537,10 @@ checksum = "f2cc38e8fa666e2de3c4aba7edeb5ffc5246c1c2ed0e3d17e560aeeba736b23f"
 
 [[package]]
 name = "rusty-sidekiq"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
- "bb8-redis",
+ "bb8",
  "chrono",
  "cron_clock",
  "heck",

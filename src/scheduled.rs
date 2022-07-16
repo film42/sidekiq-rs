@@ -1,14 +1,13 @@
-use crate::{periodic::PeriodicJob, UnitOfWork};
-use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
+use crate::{periodic::PeriodicJob, RedisPool, UnitOfWork};
 use slog::debug;
 
 pub struct Scheduled {
-    redis: Pool<RedisConnectionManager>,
+    redis: RedisPool,
     logger: slog::Logger,
 }
 
 impl Scheduled {
-    pub fn new(redis: Pool<RedisConnectionManager>, logger: slog::Logger) -> Self {
+    pub fn new(redis: RedisPool, logger: slog::Logger) -> Self {
         Self { redis, logger }
     }
 
@@ -22,13 +21,13 @@ impl Scheduled {
             let mut redis = self.redis.get().await?;
 
             let jobs: Vec<String> = redis
-                .zrangebyscore_limit(&sorted_set, "-inf", now.timestamp(), 0, 100)
+                .zrangebyscore_limit(sorted_set.clone(), "-inf", now.timestamp(), 0, 100)
                 .await?;
 
             n += jobs.len();
 
             for job in jobs {
-                if redis.zrem(&sorted_set, job.clone()).await? {
+                if redis.zrem(sorted_set.clone(), job.clone()).await? {
                     let work = UnitOfWork::from_job_string(job)?;
 
                     debug!(self.logger, "Enqueueing job";
@@ -36,7 +35,7 @@ impl Scheduled {
                         "queue" => &work.queue
                     );
 
-                    work.enqueue_direct(&mut redis).await?;
+                    work.enqueue_direct(&mut *redis).await?;
                 }
             }
         }
@@ -51,13 +50,13 @@ impl Scheduled {
         let mut conn = self.redis.get().await?;
 
         let periodic_jobs: Vec<String> = conn
-            .zrangebyscore_limit("periodic", "-inf", now.timestamp(), 0, 100)
+            .zrangebyscore_limit("periodic".to_string(), "-inf", now.timestamp(), 0, 100)
             .await?;
 
         for periodic_job in &periodic_jobs {
             let pj = PeriodicJob::from_periodic_job_string(periodic_job.clone())?;
 
-            if pj.update(&mut conn, &periodic_job).await? {
+            if pj.update(&mut *conn, &periodic_job).await? {
                 let job = pj.into_job();
                 let work = UnitOfWork::from_job(job);
 

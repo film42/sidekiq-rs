@@ -1,8 +1,10 @@
 #[cfg(test)]
 mod test {
     use async_trait::async_trait;
-    use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
-    use sidekiq::{periodic, Processor, Scheduled, WorkFetcher, Worker};
+    use bb8::Pool;
+    use sidekiq::{
+        periodic, Processor, RedisConnectionManager, RedisPool, Scheduled, WorkFetcher, Worker,
+    };
     use slog::{o, Drain};
     use std::sync::{Arc, Mutex};
 
@@ -12,19 +14,17 @@ mod test {
     }
 
     #[async_trait]
-    impl FlushAll for Pool<RedisConnectionManager> {
+    impl FlushAll for RedisPool {
         async fn flushall(&self) {
             let mut conn = self.get().await.unwrap();
             let _: String = redis::cmd("FLUSHALL")
-                .query_async(&mut *conn)
+                .query_async(conn.unnamespaced_borrow_mut())
                 .await
                 .unwrap();
         }
     }
 
-    async fn new_base_processor(
-        queue: String,
-    ) -> (Processor, Pool<RedisConnectionManager>, slog::Logger) {
+    async fn new_base_processor(queue: String) -> (Processor, RedisPool, slog::Logger) {
         // Logger
         let decorator = slog_term::PlainSyncDecorator::new(std::io::stdout());
         let drain = slog_term::FullFormat::new(decorator).build().fuse();
@@ -41,19 +41,19 @@ mod test {
         (p, redis, logger)
     }
 
-    async fn set_cron_scores_to_zero(redis: Pool<RedisConnectionManager>) {
+    async fn set_cron_scores_to_zero(redis: RedisPool) {
         let mut conn = redis.get().await.unwrap();
 
-        let jobs: Vec<String> = redis::cmd("ZRANGE")
-            .arg("periodic")
-            .arg(i32::MIN)
-            .arg(i32::MAX)
-            .query_async(&mut *conn)
+        let jobs = conn
+            .zrange("periodic".to_string(), isize::MIN, isize::MAX)
             .await
             .unwrap();
 
         for job in jobs {
-            let _: usize = conn.zadd("periodic", job.clone(), 0).await.unwrap();
+            let _: usize = conn
+                .zadd("periodic".to_string(), job.clone(), 0)
+                .await
+                .unwrap();
         }
     }
 

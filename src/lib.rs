@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use middleware::Chain;
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -13,9 +12,13 @@ pub mod periodic;
 
 mod middleware;
 mod processor;
+mod redis;
 mod scheduled;
 
 // Re-export
+pub use crate::redis::{
+    with_custom_namespace, RedisConnection, RedisConnectionManager, RedisError, RedisPool,
+};
 pub use middleware::{ChainIter, ServerMiddleware, ServerResult};
 pub use processor::{Processor, WorkFetcher};
 pub use scheduled::Scheduled;
@@ -77,7 +80,7 @@ impl EnqueueOpts {
 
     pub async fn perform_async(
         self,
-        redis: &mut Pool<RedisConnectionManager>,
+        redis: &mut RedisPool,
         class: String,
         args: impl serde::Serialize,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -88,7 +91,7 @@ impl EnqueueOpts {
 
     pub async fn perform_in(
         &self,
-        redis: &mut Pool<RedisConnectionManager>,
+        redis: &mut RedisPool,
         class: String,
         duration: std::time::Duration,
         args: impl serde::Serialize,
@@ -102,7 +105,7 @@ impl EnqueueOpts {
 /// Helper function for enqueueing a worker into sidekiq.
 /// This can be used to enqueue a job for a ruby sidekiq worker to process.
 pub async fn perform_async(
-    redis: &mut Pool<RedisConnectionManager>,
+    redis: &mut RedisPool,
     class: String,
     queue: String,
     args: impl serde::Serialize,
@@ -113,7 +116,7 @@ pub async fn perform_async(
 /// Helper function for enqueueing a worker into sidekiq.
 /// This can be used to enqueue a job for a ruby sidekiq worker to process.
 pub async fn perform_in(
-    redis: &mut Pool<RedisConnectionManager>,
+    redis: &mut RedisPool,
     duration: std::time::Duration,
     class: String,
     queue: String,
@@ -168,7 +171,7 @@ where
 
     pub async fn perform_async(
         &self,
-        redis: &mut Pool<RedisConnectionManager>,
+        redis: &mut RedisPool,
         args: impl serde::Serialize + Send + 'static,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.into_opts()
@@ -178,7 +181,7 @@ where
 
     pub async fn perform_in(
         &self,
-        redis: &mut Pool<RedisConnectionManager>,
+        redis: &mut RedisPool,
         duration: std::time::Duration,
         args: impl serde::Serialize + Send + 'static,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -233,7 +236,7 @@ pub trait Worker<Args>: Send + Sync {
     }
 
     async fn perform_async(
-        redis: &mut Pool<RedisConnectionManager>,
+        redis: &mut RedisPool,
         args: Args,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
@@ -244,7 +247,7 @@ pub trait Worker<Args>: Send + Sync {
     }
 
     async fn perform_in(
-        redis: &mut Pool<RedisConnectionManager>,
+        redis: &mut RedisPool,
         duration: std::time::Duration,
         args: Args,
     ) -> Result<(), Box<dyn std::error::Error>>
@@ -383,37 +386,34 @@ impl UnitOfWork {
         Ok(Self::from_job(job))
     }
 
-    pub async fn enqueue(
-        &self,
-        redis: &mut Pool<RedisConnectionManager>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn enqueue(&self, redis: &mut RedisPool) -> Result<(), Box<dyn std::error::Error>> {
         let mut redis = redis.get().await?;
-        self.enqueue_direct(&mut redis).await
+        self.enqueue_direct(&mut *redis).await
     }
 
     async fn enqueue_direct(
         &self,
-        redis: &mut redis::aio::Connection,
+        redis: &mut RedisConnection,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut job = self.job.clone();
         job.enqueued_at = Some(chrono::Utc::now().timestamp() as f64);
 
         redis
-            .rpush(&self.queue, serde_json::to_string(&job)?)
+            .rpush(self.queue.clone(), serde_json::to_string(&job)?)
             .await?;
         Ok(())
     }
 
     pub async fn reenqueue(
         &mut self,
-        redis: &mut Pool<RedisConnectionManager>,
+        redis: &mut RedisPool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(retry_count) = self.job.retry_count {
             redis
                 .get()
                 .await?
                 .zadd(
-                    "retry",
+                    "retry".to_string(),
                     serde_json::to_string(&self.job)?,
                     Self::retry_job_at(retry_count).timestamp(),
                 )
@@ -432,20 +432,22 @@ impl UnitOfWork {
 
     pub async fn schedule(
         &mut self,
-        redis: &mut Pool<RedisConnectionManager>,
+        redis: &mut RedisPool,
         duration: std::time::Duration,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let enqueue_at = chrono::Utc::now() + chrono::Duration::from_std(duration)?;
 
-        Ok(redis
+        redis
             .get()
             .await?
             .zadd(
-                "schedule",
+                "schedule".to_string(),
                 serde_json::to_string(&self.job)?,
                 enqueue_at.timestamp(),
             )
-            .await?)
+            .await?;
+
+        Ok(())
     }
 }
 

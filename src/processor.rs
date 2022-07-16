@@ -1,7 +1,7 @@
 use crate::{
-    periodic::PeriodicJob, Chain, Job, Scheduled, ServerMiddleware, UnitOfWork, Worker, WorkerRef,
+    periodic::PeriodicJob, Chain, Job, RedisPool, Scheduled, ServerMiddleware, UnitOfWork, Worker,
+    WorkerRef,
 };
-use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
 use slog::{error, info};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ pub enum WorkFetcher {
 
 #[derive(Clone)]
 pub struct Processor {
-    redis: Pool<RedisConnectionManager>,
+    redis: RedisPool,
     queues: Vec<String>,
     periodic_jobs: Vec<PeriodicJob>,
     workers: BTreeMap<String, Arc<WorkerRef>>,
@@ -23,11 +23,7 @@ pub struct Processor {
 }
 
 impl Processor {
-    pub fn new(
-        redis: Pool<RedisConnectionManager>,
-        logger: slog::Logger,
-        queues: Vec<String>,
-    ) -> Self {
+    pub fn new(redis: RedisPool, logger: slog::Logger, queues: Vec<String>) -> Self {
         Self {
             chain: Chain::new(logger.clone()),
             workers: BTreeMap::new(),
@@ -43,8 +39,12 @@ impl Processor {
     }
 
     async fn fetch(&mut self) -> Result<Option<UnitOfWork>, Box<dyn std::error::Error>> {
-        let response: Option<(String, String)> =
-            self.redis.get().await?.brpop(&self.queues, 2).await?;
+        let response: Option<(String, String)> = self
+            .redis
+            .get()
+            .await?
+            .brpop(self.queues.clone(), 2)
+            .await?;
 
         if let Some((queue, job_raw)) = response {
             let job: Job = serde_json::from_str(&job_raw)?;
