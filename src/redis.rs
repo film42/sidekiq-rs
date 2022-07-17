@@ -150,6 +150,17 @@ impl RedisConnection {
             .await?)
     }
 
+    pub async fn sadd(
+        &mut self,
+        key: String,
+        value: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(self
+            .connection
+            .sadd(self.namespaced_key(key), value)
+            .await?)
+    }
+
     pub async fn zrange(
         &mut self,
         key: String,
