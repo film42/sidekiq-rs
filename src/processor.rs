@@ -166,6 +166,37 @@ impl Processor {
             });
         }
 
+        // 127.0.0.1:6379> hkeys "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06"
+        // 1) "rtt_us"
+        // 2) "quiet"
+        // 3) "busy"
+        // 4) "beat"
+        // 5) "info"
+        // 6) "rss"
+        // 127.0.0.1:6379> hget "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06" info
+        // "{\"hostname\":\"DESKTOP-UMSV21A\",\"started_at\":1658082501.5606177,\"pid\":107068,\"tag\":\"\",\"concurrency\":10,\"queues\":[\"ruby:v1_statistics\",\"ruby:v2_statistics\"],\"labels\":[],\"identity\":\"DESKTOP-UMSV21A:107068:5075431aeb06\"}"
+        // 127.0.0.1:6379> hget "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06" irss
+        // (nil)
+
+        // Start sidekiq-web metrics publisher.
+        tokio::spawn({
+            let logger = self.logger.clone();
+            let redis = self.redis.clone();
+            async move {
+                let sched = Scheduled::new(redis, logger.clone());
+                let sorted_sets = vec!["retry".to_string(), "schedule".to_string()];
+
+                loop {
+                    // TODO: Use process count to meet a 5 second avg.
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                    if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await {
+                        error!(logger, "Error in scheduled poller routine: {:?}", err);
+                    }
+                }
+            }
+        });
+
         // Start retry and scheduled routines.
         tokio::spawn({
             let logger = self.logger.clone();
