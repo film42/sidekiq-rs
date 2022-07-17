@@ -398,6 +398,8 @@ impl UnitOfWork {
         let mut job = self.job.clone();
         job.enqueued_at = Some(chrono::Utc::now().timestamp() as f64);
 
+        redis.sadd("queues".to_string(), job.queue.clone()).await?;
+
         redis
             .lpush(self.queue.clone(), serde_json::to_string(&job)?)
             .await?;
