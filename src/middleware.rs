@@ -64,15 +64,6 @@ impl Chain {
         }
     }
 
-    pub(crate) fn new(logger: slog::Logger) -> Self {
-        Self {
-            stack: Arc::new(RwLock::new(vec![
-                Box::new(RetryMiddleware::new(logger)),
-                Box::new(HandlerMiddleware),
-            ])),
-        }
-    }
-
     pub(crate) fn new_with_stats(logger: slog::Logger, counter: Arc<AtomicUsize>) -> Self {
         Self {
             stack: Arc::new(RwLock::new(vec![
@@ -81,15 +72,6 @@ impl Chain {
                 Box::new(HandlerMiddleware),
             ])),
         }
-    }
-
-    pub(crate) async fn using_at_index(
-        &mut self,
-        index: usize,
-        middleware: Box<dyn ServerMiddleware + Send + Sync>,
-    ) {
-        let mut stack = self.stack.write().await;
-        stack.insert(index, middleware);
     }
 
     pub(crate) async fn using(&mut self, middleware: Box<dyn ServerMiddleware + Send + Sync>) {
