@@ -1,4 +1,8 @@
+use crate::RedisPool;
 use rand::RngCore;
+use serde::Serialize;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 struct ProcessStats {
     rtt_us: String,
@@ -9,10 +13,11 @@ struct ProcessStats {
     rss: String,
 }
 
+#[derive(Serialize)]
 struct ProcessInfo {
     hostname: String,
     identity: String,
-    started_at: chrono::DateTime<chrono::Utc>,
+    started_at: f64,
     pid: u32,
     tag: Option<String>,
     concurrency: usize,
@@ -20,11 +25,12 @@ struct ProcessInfo {
     labels: Vec<String>,
 }
 
-pub struct StatPoller {
+pub struct StatsPublisher {
     hostname: String,
     identity: String,
     queues: Vec<String>,
     started_at: chrono::DateTime<chrono::Utc>,
+    busy_jobs: Arc<AtomicUsize>,
 }
 
 fn generate_identity(hostname: &String) -> String {
@@ -36,8 +42,8 @@ fn generate_identity(hostname: &String) -> String {
     format!("{hostname}:{pid}:{nonce}")
 }
 
-impl StatPublisher {
-    fn new(hostname: String, queues: Vec<String>) -> Self {
+impl StatsPublisher {
+    pub fn new(hostname: String, queues: Vec<String>, busy_jobs: Arc<AtomicUsize>) -> Self {
         let identity = generate_identity(&hostname);
         let started_at = chrono::Utc::now();
 
@@ -46,13 +52,46 @@ impl StatPublisher {
             identity,
             queues,
             started_at,
+            busy_jobs,
         }
     }
 
+    // 127.0.0.1:6379> hkeys "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06"
+    // 1) "rtt_us"
+    // 2) "quiet"
+    // 3) "busy"
+    // 4) "beat"
+    // 5) "info"
+    // 6) "rss"
+    // 127.0.0.1:6379> hget "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06" info
+    // "{\"hostname\":\"DESKTOP-UMSV21A\",\"started_at\":1658082501.5606177,\"pid\":107068,\"tag\":\"\",\"concurrency\":10,\"queues\":[\"ruby:v1_statistics\",\"ruby:v2_statistics\"],\"labels\":[],\"identity\":\"DESKTOP-UMSV21A:107068:5075431aeb06\"}"
+    // 127.0.0.1:6379> hget "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06" irss
+    // (nil)
     pub async fn publish_stats(&self, redis: RedisPool) -> Result<(), Box<dyn std::error::Error>> {
         let stats = self.create_process_stats();
         let mut conn = redis.get().await?;
-        conn.hset(self.identity.clone(),
+        conn.cmd_with_key("HSET", self.identity.clone())
+            .arg("rss")
+            .arg(stats.rss)
+            .arg("rtt_us")
+            .arg(stats.rtt_us)
+            .arg("busy")
+            .arg(stats.busy)
+            .arg("quiet")
+            .arg(stats.quiet)
+            .arg("beat")
+            .arg(stats.beat.timestamp())
+            .arg("info")
+            .arg(serde_json::to_string(&stats.info)?)
+            .query_async(conn.unnamespaced_borrow_mut())
+            .await?;
+
+        conn.expire(self.identity.clone(), 30).await?;
+
+        conn.sadd("processes".to_string(), self.identity.clone())
+            .await?;
+
+        Ok(())
     }
 
     fn create_process_stats(&self) -> ProcessStats {
@@ -60,7 +99,7 @@ impl StatPublisher {
             // TODO: Individual metrics.
             rtt_us: "0".into(),
             rss: "0".into(),
-            busy: 0,
+            busy: self.busy_jobs.load(Ordering::SeqCst),
             quiet: false,
 
             beat: chrono::Utc::now(),
@@ -69,7 +108,7 @@ impl StatPublisher {
                 hostname: self.hostname.clone(),
                 identity: self.identity.clone(),
                 queues: self.queues.clone(),
-                started_at: self.started_at.clone(),
+                started_at: self.started_at.clone().timestamp() as f64,
                 pid: std::process::id(),
 
                 // TODO: Fill out labels and tags.

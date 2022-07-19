@@ -25,7 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
     let redis = Pool::builder()
-        .connection_customizer(sidekiq::with_custom_namespace("cool_app".to_string()))
+        .max_size(100)
+        .connection_customizer(sidekiq::with_custom_namespace("yolo_app".to_string()))
         .build(manager)
         .await?;
 

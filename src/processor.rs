@@ -1,9 +1,10 @@
 use crate::{
-    periodic::PeriodicJob, Chain, Job, RedisPool, Scheduled, ServerMiddleware, UnitOfWork, Worker,
-    WorkerRef,
+    periodic::PeriodicJob, Chain, Job, RedisPool, Scheduled, ServerMiddleware, StatsPublisher,
+    UnitOfWork, Worker, WorkerRef,
 };
 use slog::{error, info};
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -16,18 +17,22 @@ pub enum WorkFetcher {
 pub struct Processor {
     redis: RedisPool,
     queues: Vec<String>,
+    human_readable_queues: Vec<String>,
     periodic_jobs: Vec<PeriodicJob>,
     workers: BTreeMap<String, Arc<WorkerRef>>,
     logger: slog::Logger,
     chain: Chain,
+    busy_jobs: Arc<AtomicUsize>,
 }
 
 impl Processor {
     pub fn new(redis: RedisPool, logger: slog::Logger, queues: Vec<String>) -> Self {
+        let busy_jobs = Arc::new(AtomicUsize::new(0));
         Self {
-            chain: Chain::new(logger.clone()),
+            chain: Chain::new_with_stats(logger.clone(), busy_jobs.clone()),
             workers: BTreeMap::new(),
             periodic_jobs: vec![],
+            busy_jobs,
 
             redis,
             logger,
@@ -35,6 +40,7 @@ impl Processor {
                 .iter()
                 .map(|queue| format!("queue:{queue}"))
                 .collect(),
+            human_readable_queues: queues,
         }
     }
 
@@ -48,7 +54,6 @@ impl Processor {
 
         if let Some((queue, job_raw)) = response {
             let job: Job = serde_json::from_str(&job_raw)?;
-            // println!("{:?}", (&queue, &args));
             return Ok(Some(UnitOfWork { queue, job }));
         }
 
@@ -166,32 +171,27 @@ impl Processor {
             });
         }
 
-        // 127.0.0.1:6379> hkeys "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06"
-        // 1) "rtt_us"
-        // 2) "quiet"
-        // 3) "busy"
-        // 4) "beat"
-        // 5) "info"
-        // 6) "rss"
-        // 127.0.0.1:6379> hget "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06" info
-        // "{\"hostname\":\"DESKTOP-UMSV21A\",\"started_at\":1658082501.5606177,\"pid\":107068,\"tag\":\"\",\"concurrency\":10,\"queues\":[\"ruby:v1_statistics\",\"ruby:v2_statistics\"],\"labels\":[],\"identity\":\"DESKTOP-UMSV21A:107068:5075431aeb06\"}"
-        // 127.0.0.1:6379> hget "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06" irss
-        // (nil)
-
         // Start sidekiq-web metrics publisher.
         tokio::spawn({
             let logger = self.logger.clone();
             let redis = self.redis.clone();
+            let queues = self.human_readable_queues.clone();
+            let busy_jobs = self.busy_jobs.clone();
             async move {
-                let sched = Scheduled::new(redis, logger.clone());
-                let sorted_sets = vec!["retry".to_string(), "schedule".to_string()];
+                let hostname = if let Some(host) = gethostname::gethostname().to_str() {
+                    host.to_string()
+                } else {
+                    "UNKNOWN_HOSTNAME".to_string()
+                };
+
+                let stats_publisher = StatsPublisher::new(hostname, queues, busy_jobs);
 
                 loop {
                     // TODO: Use process count to meet a 5 second avg.
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-                    if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await {
-                        error!(logger, "Error in scheduled poller routine: {:?}", err);
+                    if let Err(err) = stats_publisher.publish_stats(redis.clone()).await {
+                        error!(logger, "Error publishing processor stats: {:?}", err);
                     }
                 }
             }

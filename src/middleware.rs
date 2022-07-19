@@ -1,6 +1,7 @@
 use crate::{Job, RedisPool, UnitOfWork, WorkerRef};
 use async_trait::async_trait;
 use slog::error;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -72,6 +73,25 @@ impl Chain {
         }
     }
 
+    pub(crate) fn new_with_stats(logger: slog::Logger, counter: Arc<AtomicUsize>) -> Self {
+        Self {
+            stack: Arc::new(RwLock::new(vec![
+                Box::new(RetryMiddleware::new(logger)),
+                Box::new(StatsMiddleware::new(counter)),
+                Box::new(HandlerMiddleware),
+            ])),
+        }
+    }
+
+    pub(crate) async fn using_at_index(
+        &mut self,
+        index: usize,
+        middleware: Box<dyn ServerMiddleware + Send + Sync>,
+    ) {
+        let mut stack = self.stack.write().await;
+        stack.insert(index, middleware);
+    }
+
     pub(crate) async fn using(&mut self, middleware: Box<dyn ServerMiddleware + Send + Sync>) {
         let mut stack = self.stack.write().await;
         // HACK: Insert after retry middleware but before the handler middleware.
@@ -100,6 +120,33 @@ impl Chain {
         // up the stack. Each middleware can short-circuit the stack by
         // not calling the "next" middleware.
         self.iter().next(job, worker, redis).await
+    }
+}
+
+pub struct StatsMiddleware {
+    busy_count: Arc<AtomicUsize>,
+}
+
+impl StatsMiddleware {
+    fn new(busy_count: Arc<AtomicUsize>) -> Self {
+        Self { busy_count }
+    }
+}
+
+#[async_trait]
+impl ServerMiddleware for StatsMiddleware {
+    #[inline]
+    async fn call(
+        &self,
+        _chain: ChainIter,
+        job: &Job,
+        worker: Arc<WorkerRef>,
+        _redis: RedisPool,
+    ) -> ServerResult {
+        self.busy_count.fetch_add(1, Ordering::SeqCst);
+        let res = worker.call(job.args.clone()).await;
+        self.busy_count.fetch_sub(1, Ordering::SeqCst);
+        res
     }
 }
 
