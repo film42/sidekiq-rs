@@ -14,6 +14,7 @@ mod middleware;
 mod processor;
 mod redis;
 mod scheduled;
+mod stats;
 
 // Re-export
 pub use crate::redis::{
@@ -22,6 +23,7 @@ pub use crate::redis::{
 pub use middleware::{ChainIter, ServerMiddleware, ServerResult};
 pub use processor::{Processor, WorkFetcher};
 pub use scheduled::Scheduled;
+pub use stats::{Counter, StatsPublisher};
 
 pub fn opts() -> EnqueueOpts {
     EnqueueOpts {

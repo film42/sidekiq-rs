@@ -1,4 +1,4 @@
-use crate::{Job, RedisPool, UnitOfWork, WorkerRef};
+use crate::{Counter, Job, RedisPool, UnitOfWork, WorkerRef};
 use async_trait::async_trait;
 use slog::error;
 use std::sync::Arc;
@@ -63,10 +63,11 @@ impl Chain {
         }
     }
 
-    pub(crate) fn new(logger: slog::Logger) -> Self {
+    pub(crate) fn new_with_stats(logger: slog::Logger, counter: Counter) -> Self {
         Self {
             stack: Arc::new(RwLock::new(vec![
                 Box::new(RetryMiddleware::new(logger)),
+                Box::new(StatsMiddleware::new(counter)),
                 Box::new(HandlerMiddleware),
             ])),
         }
@@ -100,6 +101,33 @@ impl Chain {
         // up the stack. Each middleware can short-circuit the stack by
         // not calling the "next" middleware.
         self.iter().next(job, worker, redis).await
+    }
+}
+
+pub struct StatsMiddleware {
+    busy_count: Counter,
+}
+
+impl StatsMiddleware {
+    fn new(busy_count: Counter) -> Self {
+        Self { busy_count }
+    }
+}
+
+#[async_trait]
+impl ServerMiddleware for StatsMiddleware {
+    #[inline]
+    async fn call(
+        &self,
+        _chain: ChainIter,
+        job: &Job,
+        worker: Arc<WorkerRef>,
+        _redis: RedisPool,
+    ) -> ServerResult {
+        self.busy_count.incrby(1);
+        let res = worker.call(job.args.clone()).await;
+        self.busy_count.decrby(1);
+        res
     }
 }
 

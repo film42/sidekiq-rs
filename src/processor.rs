@@ -1,6 +1,6 @@
 use crate::{
-    periodic::PeriodicJob, Chain, Job, RedisPool, Scheduled, ServerMiddleware, UnitOfWork, Worker,
-    WorkerRef,
+    periodic::PeriodicJob, Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware,
+    StatsPublisher, UnitOfWork, Worker, WorkerRef,
 };
 use slog::{error, info};
 use std::collections::BTreeMap;
@@ -16,18 +16,23 @@ pub enum WorkFetcher {
 pub struct Processor {
     redis: RedisPool,
     queues: Vec<String>,
+    human_readable_queues: Vec<String>,
     periodic_jobs: Vec<PeriodicJob>,
     workers: BTreeMap<String, Arc<WorkerRef>>,
     logger: slog::Logger,
     chain: Chain,
+    busy_jobs: Counter,
 }
 
 impl Processor {
     pub fn new(redis: RedisPool, logger: slog::Logger, queues: Vec<String>) -> Self {
+        let busy_jobs = Counter::new(0);
+
         Self {
-            chain: Chain::new(logger.clone()),
+            chain: Chain::new_with_stats(logger.clone(), busy_jobs.clone()),
             workers: BTreeMap::new(),
             periodic_jobs: vec![],
+            busy_jobs,
 
             redis,
             logger,
@@ -35,6 +40,7 @@ impl Processor {
                 .iter()
                 .map(|queue| format!("queue:{queue}"))
                 .collect(),
+            human_readable_queues: queues,
         }
     }
 
@@ -48,7 +54,6 @@ impl Processor {
 
         if let Some((queue, job_raw)) = response {
             let job: Job = serde_json::from_str(&job_raw)?;
-            // println!("{:?}", (&queue, &args));
             return Ok(Some(UnitOfWork { queue, job }));
         }
 
@@ -165,6 +170,32 @@ impl Processor {
                 }
             });
         }
+
+        // Start sidekiq-web metrics publisher.
+        tokio::spawn({
+            let logger = self.logger.clone();
+            let redis = self.redis.clone();
+            let queues = self.human_readable_queues.clone();
+            let busy_jobs = self.busy_jobs.clone();
+            async move {
+                let hostname = if let Some(host) = gethostname::gethostname().to_str() {
+                    host.to_string()
+                } else {
+                    "UNKNOWN_HOSTNAME".to_string()
+                };
+
+                let stats_publisher = StatsPublisher::new(hostname, queues, busy_jobs);
+
+                loop {
+                    // TODO: Use process count to meet a 5 second avg.
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                    if let Err(err) = stats_publisher.publish_stats(redis.clone()).await {
+                        error!(logger, "Error publishing processor stats: {:?}", err);
+                    }
+                }
+            }
+        });
 
         // Start retry and scheduled routines.
         tokio::spawn({

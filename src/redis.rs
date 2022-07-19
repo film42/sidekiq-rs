@@ -135,8 +135,25 @@ impl RedisConnection {
             .await?)
     }
 
+    pub fn cmd_with_key(&mut self, cmd: &str, key: String) -> redis::Cmd {
+        let mut c = redis::cmd(cmd);
+        c.arg(self.namespaced_key(key));
+        c
+    }
+
     pub async fn del(&mut self, key: String) -> Result<usize, Box<dyn std::error::Error>> {
         Ok(self.connection.del(self.namespaced_key(key)).await?)
+    }
+
+    pub async fn expire(
+        &mut self,
+        key: String,
+        value: usize,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        Ok(self
+            .connection
+            .expire(self.namespaced_key(key), value)
+            .await?)
     }
 
     pub async fn lpush(
