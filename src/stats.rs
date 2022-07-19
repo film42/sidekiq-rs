@@ -4,6 +4,31 @@ use serde::Serialize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+#[derive(Clone)]
+pub struct Counter {
+    count: Arc<AtomicUsize>,
+}
+
+impl Counter {
+    pub fn new(n: usize) -> Self {
+        Self {
+            count: Arc::new(AtomicUsize::new(n)),
+        }
+    }
+
+    pub fn value(&self) -> usize {
+        self.count.load(Ordering::SeqCst)
+    }
+
+    pub fn decrby(&self, n: usize) -> usize {
+        self.count.fetch_sub(n, Ordering::SeqCst)
+    }
+
+    pub fn incrby(&self, n: usize) -> usize {
+        self.count.fetch_add(n, Ordering::SeqCst)
+    }
+}
+
 struct ProcessStats {
     rtt_us: String,
     quiet: bool,
@@ -30,7 +55,7 @@ pub struct StatsPublisher {
     identity: String,
     queues: Vec<String>,
     started_at: chrono::DateTime<chrono::Utc>,
-    busy_jobs: Arc<AtomicUsize>,
+    busy_jobs: Counter,
 }
 
 fn generate_identity(hostname: &String) -> String {
@@ -43,7 +68,7 @@ fn generate_identity(hostname: &String) -> String {
 }
 
 impl StatsPublisher {
-    pub fn new(hostname: String, queues: Vec<String>, busy_jobs: Arc<AtomicUsize>) -> Self {
+    pub fn new(hostname: String, queues: Vec<String>, busy_jobs: Counter) -> Self {
         let identity = generate_identity(&hostname);
         let started_at = chrono::Utc::now();
 
@@ -103,7 +128,7 @@ impl StatsPublisher {
                     .await?
                     .memory_usage_bytes
             ),
-            busy: self.busy_jobs.load(Ordering::SeqCst),
+            busy: self.busy_jobs.value(),
             quiet: false,
 
             beat: chrono::Utc::now(),

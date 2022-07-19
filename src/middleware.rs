@@ -1,7 +1,6 @@
-use crate::{Job, RedisPool, UnitOfWork, WorkerRef};
+use crate::{Counter, Job, RedisPool, UnitOfWork, WorkerRef};
 use async_trait::async_trait;
 use slog::error;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -64,7 +63,7 @@ impl Chain {
         }
     }
 
-    pub(crate) fn new_with_stats(logger: slog::Logger, counter: Arc<AtomicUsize>) -> Self {
+    pub(crate) fn new_with_stats(logger: slog::Logger, counter: Counter) -> Self {
         Self {
             stack: Arc::new(RwLock::new(vec![
                 Box::new(RetryMiddleware::new(logger)),
@@ -106,11 +105,11 @@ impl Chain {
 }
 
 pub struct StatsMiddleware {
-    busy_count: Arc<AtomicUsize>,
+    busy_count: Counter,
 }
 
 impl StatsMiddleware {
-    fn new(busy_count: Arc<AtomicUsize>) -> Self {
+    fn new(busy_count: Counter) -> Self {
         Self { busy_count }
     }
 }
@@ -125,9 +124,9 @@ impl ServerMiddleware for StatsMiddleware {
         worker: Arc<WorkerRef>,
         _redis: RedisPool,
     ) -> ServerResult {
-        self.busy_count.fetch_add(1, Ordering::SeqCst);
+        self.busy_count.incrby(1);
         let res = worker.call(job.args.clone()).await;
-        self.busy_count.fetch_sub(1, Ordering::SeqCst);
+        self.busy_count.decrby(1);
         res
     }
 }

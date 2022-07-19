@@ -1,10 +1,9 @@
 use crate::{
-    periodic::PeriodicJob, Chain, Job, RedisPool, Scheduled, ServerMiddleware, StatsPublisher,
-    UnitOfWork, Worker, WorkerRef,
+    periodic::PeriodicJob, Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware,
+    StatsPublisher, UnitOfWork, Worker, WorkerRef,
 };
 use slog::{error, info};
 use std::collections::BTreeMap;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -22,12 +21,13 @@ pub struct Processor {
     workers: BTreeMap<String, Arc<WorkerRef>>,
     logger: slog::Logger,
     chain: Chain,
-    busy_jobs: Arc<AtomicUsize>,
+    busy_jobs: Counter,
 }
 
 impl Processor {
     pub fn new(redis: RedisPool, logger: slog::Logger, queues: Vec<String>) -> Self {
-        let busy_jobs = Arc::new(AtomicUsize::new(0));
+        let busy_jobs = Counter::new(0);
+
         Self {
             chain: Chain::new_with_stats(logger.clone(), busy_jobs.clone()),
             workers: BTreeMap::new(),

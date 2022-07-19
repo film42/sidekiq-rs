@@ -23,7 +23,7 @@ pub use crate::redis::{
 pub use middleware::{ChainIter, ServerMiddleware, ServerResult};
 pub use processor::{Processor, WorkFetcher};
 pub use scheduled::Scheduled;
-pub use stats::StatsPublisher;
+pub use stats::{Counter, StatsPublisher};
 
 pub fn opts() -> EnqueueOpts {
     EnqueueOpts {
