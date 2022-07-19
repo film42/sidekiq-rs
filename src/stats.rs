@@ -68,7 +68,7 @@ impl StatsPublisher {
     // 127.0.0.1:6379> hget "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06" irss
     // (nil)
     pub async fn publish_stats(&self, redis: RedisPool) -> Result<(), Box<dyn std::error::Error>> {
-        let stats = self.create_process_stats();
+        let stats = self.create_process_stats().await?;
         let mut conn = redis.get().await?;
         conn.cmd_with_key("HSET", self.identity.clone())
             .arg("rss")
@@ -94,11 +94,15 @@ impl StatsPublisher {
         Ok(())
     }
 
-    fn create_process_stats(&self) -> ProcessStats {
-        ProcessStats {
-            // TODO: Individual metrics.
+    async fn create_process_stats(&self) -> Result<ProcessStats, Box<dyn std::error::Error>> {
+        Ok(ProcessStats {
             rtt_us: "0".into(),
-            rss: "0".into(),
+            rss: format!(
+                "{}",
+                simple_process_stats::ProcessStats::get()
+                    .await?
+                    .memory_usage_bytes
+            ),
             busy: self.busy_jobs.load(Ordering::SeqCst),
             quiet: false,
 
@@ -115,6 +119,6 @@ impl StatsPublisher {
                 labels: vec![],
                 tag: None,
             },
-        }
+        })
     }
 }
