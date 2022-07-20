@@ -1,0 +1,15 @@
+[package]
+name = "rustic"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rusty-sidekiq = { path = "../../../" }
+serde = { version = "1.0", features = ["derive"] }
+async-trait = "0.1"
+bb8 = "0.8"
+slog = "2.7"
+slog-term = "2.9"
+tokio = { version = "1", features = ["full"]}

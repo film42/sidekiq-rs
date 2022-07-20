@@ -1,0 +1,2 @@
+rust: cd rustic && cargo run
+ruby: cd rubies && foreman start

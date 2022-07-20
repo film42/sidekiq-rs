@@ -1,0 +1,1 @@
+app: bundle exec sidekiq -q ruby:v1_statistics -q ruby:v2_statistics -r ./app.rb
