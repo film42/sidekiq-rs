@@ -221,7 +221,7 @@ pub trait Worker<Args>: Send + Sync {
 
     // TODO: Make configurable through opts and make opts accessible to the
     // retry middleware through a Box<dyn Worker>.
-    fn max_retries(&self) -> usize {
+    fn max_retries(&self) -> isize {
         25
     }
 
@@ -279,7 +279,7 @@ pub struct WorkerRef {
                 + Sync,
         >,
     >,
-    max_retries: usize,
+    max_retries: isize,
 }
 
 async fn invoke_worker<Args, W>(args: JsonValue, worker: Arc<W>) -> ServerResult
@@ -330,7 +330,7 @@ impl WorkerRef {
         }
     }
 
-    pub fn max_retries(&self) -> usize {
+    pub fn max_retries(&self) -> isize {
         self.max_retries
     }
 
@@ -365,7 +365,9 @@ pub struct Job {
     pub enqueued_at: Option<f64>,
     pub failed_at: Option<f64>,
     pub error_message: Option<String>,
-    pub retry_count: Option<usize>,
+    // This is isize because it's possible for other langs to implement this with an
+    // isize type by default.
+    pub retry_count: Option<isize>,
     pub retried_at: Option<f64>,
 }
 
@@ -427,7 +429,7 @@ impl UnitOfWork {
         Ok(())
     }
 
-    fn retry_job_at(count: usize) -> chrono::DateTime<chrono::Utc> {
+    fn retry_job_at(count: isize) -> chrono::DateTime<chrono::Utc> {
         let seconds_to_delay =
             count.pow(4) + 15 + (rand::thread_rng().gen_range(0..30) * (count + 1));
 
