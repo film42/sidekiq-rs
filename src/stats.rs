@@ -120,16 +120,19 @@ impl StatsPublisher {
     }
 
     async fn create_process_stats(&self) -> Result<ProcessStats, Box<dyn std::error::Error>> {
+        let rss_in_kb = format!(
+            "{}",
+            simple_process_stats::ProcessStats::get()
+                .await?
+                .memory_usage_bytes
+                / 1024
+        );
+
         Ok(ProcessStats {
             rtt_us: "0".into(),
-            rss: format!(
-                "{}",
-                simple_process_stats::ProcessStats::get()
-                    .await?
-                    .memory_usage_bytes
-            ),
             busy: self.busy_jobs.value(),
             quiet: false,
+            rss: rss_in_kb,
 
             beat: chrono::Utc::now(),
             info: ProcessInfo {
