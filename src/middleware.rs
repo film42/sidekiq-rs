@@ -119,13 +119,13 @@ impl ServerMiddleware for StatsMiddleware {
     #[inline]
     async fn call(
         &self,
-        _chain: ChainIter,
+        chain: ChainIter,
         job: &Job,
         worker: Arc<WorkerRef>,
-        _redis: RedisPool,
+        redis: RedisPool,
     ) -> ServerResult {
         self.busy_count.incrby(1);
-        let res = worker.call(job.args.clone()).await;
+        let res = chain.next(job, worker, redis).await;
         self.busy_count.decrby(1);
         res
     }
