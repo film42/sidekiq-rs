@@ -3,6 +3,7 @@ use bb8::{CustomizeConnection, ManageConnection, Pool};
 use async_trait::async_trait;
 use redis::AsyncCommands;
 use redis::ToRedisArgs;
+pub use redis::Value as RedisValue;
 use redis::{aio::Connection, ErrorKind};
 use redis::{Client, IntoConnectionInfo};
 use std::ops::DerefMut;
@@ -175,6 +176,22 @@ impl RedisConnection {
         Ok(self
             .connection
             .sadd(self.namespaced_key(key), value)
+            .await?)
+    }
+
+    pub async fn set_nx_ex(
+        &mut self,
+        key: String,
+        value: String,
+        ttl_in_seconds: usize,
+    ) -> Result<RedisValue, Box<dyn std::error::Error>> {
+        Ok(redis::cmd("SET")
+            .arg(self.namespaced_key(key))
+            .arg(value)
+            .arg("NX")
+            .arg("EX")
+            .arg(ttl_in_seconds)
+            .query_async(self.unnamespaced_borrow_mut())
             .await?)
     }
 

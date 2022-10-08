@@ -211,6 +211,9 @@ impl PeriodicJob {
             failed_at: None,
             retry_count: None,
             retried_at: None,
+
+            // Meta data not used in periodic jobs right now...
+            unique_for: None,
         }
     }
 }

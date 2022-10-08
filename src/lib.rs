@@ -3,6 +3,7 @@ use middleware::Chain;
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use sha2::{Digest, Sha256};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -29,12 +30,14 @@ pub fn opts() -> EnqueueOpts {
     EnqueueOpts {
         queue: "default".into(),
         retry: true,
+        unique_for: None,
     }
 }
 
 pub struct EnqueueOpts {
     queue: String,
     retry: bool,
+    unique_for: Option<std::time::Duration>,
 }
 
 impl EnqueueOpts {
@@ -44,9 +47,15 @@ impl EnqueueOpts {
             ..self
         }
     }
-
     pub fn retry(self, retry: bool) -> Self {
         Self { retry, ..self }
+    }
+
+    pub fn unique_for(self, unique_for: std::time::Duration) -> Self {
+        Self {
+            unique_for: Some(unique_for),
+            ..self
+        }
     }
 
     fn create_job(
@@ -77,6 +86,9 @@ impl EnqueueOpts {
             failed_at: None,
             retry_count: None,
             retried_at: None,
+
+            // Meta for enqueueing
+            unique_for: self.unique_for,
         })
     }
 
@@ -141,6 +153,7 @@ pub struct WorkerOpts<Args, W: Worker<Args> + ?Sized> {
     retry: bool,
     args: PhantomData<Args>,
     worker: PhantomData<W>,
+    unique_for: Option<std::time::Duration>,
 }
 
 impl<Args, W> WorkerOpts<Args, W>
@@ -153,6 +166,7 @@ where
             retry: true,
             args: PhantomData,
             worker: PhantomData,
+            unique_for: None,
         }
     }
 
@@ -163,6 +177,13 @@ where
     pub fn queue<S: Into<String>>(self, queue: S) -> Self {
         Self {
             queue: queue.into(),
+            ..self
+        }
+    }
+
+    pub fn unique_for(self, unique_for: std::time::Duration) -> Self {
+        Self {
+            unique_for: Some(unique_for),
             ..self
         }
     }
@@ -198,6 +219,7 @@ impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
         Self {
             retry: opts.retry,
             queue: opts.queue.clone(),
+            unique_for: opts.unique_for,
         }
     }
 }
@@ -367,6 +389,9 @@ pub struct Job {
     pub error_message: Option<String>,
     pub retry_count: Option<usize>,
     pub retried_at: Option<f64>,
+
+    #[serde(skip)]
+    pub unique_for: Option<std::time::Duration>,
 }
 
 #[derive(Debug)]
@@ -399,6 +424,25 @@ impl UnitOfWork {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut job = self.job.clone();
         job.enqueued_at = Some(chrono::Utc::now().timestamp() as f64);
+
+        if let Some(ref duration) = job.unique_for {
+            // Check to see if this is unique for the given duration.
+            // Even though SET k v NX EQ ttl isn't the best locking
+            // mechanism, I think it's "good enough" to prove this out.
+            let args_as_json_string: String = serde_json::to_string(&job.args)?;
+            let args_hash = format!("{:x}", Sha256::digest(&args_as_json_string));
+            let redis_key = format!(
+                "sidekiq:unique:{}:{}:{}",
+                &job.queue, &job.class, &args_hash
+            );
+            if let redis::RedisValue::Nil = redis
+                .set_nx_ex(redis_key, "".into(), duration.as_secs() as usize)
+                .await?
+            {
+                // This job has already been enqueued. Do not submit it to redis.
+                return Ok(());
+            }
+        }
 
         redis.sadd("queues".to_string(), job.queue.clone()).await?;
 
