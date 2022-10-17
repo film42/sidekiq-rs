@@ -100,6 +100,14 @@ sidekiq::perform_async(
 
 See more examples in `examples/demo.rs`.
 
+#### Unique jobs
+
+Unique jobs are supported via the `unique_for` option which can be defined by default on the
+worker or via `SomeWorker::opts().unique_for(duration)`. See the `examples/unique.rs` example
+to only enqueue a job that is unique via (worker_name, queue_name, sha256_hash_of_job_args) for
+some defined `ttl`. Note: This is using `SET key value NX EX duration` under the hood as a "good
+enough" lock on the job.
+
 
 ## Starting the Server
 

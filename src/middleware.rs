@@ -231,6 +231,7 @@ mod test {
             error_message: None,
             retry_count: None,
             retried_at: None,
+            unique_for: None,
         }
     }
 
