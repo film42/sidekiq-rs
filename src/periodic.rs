@@ -104,7 +104,7 @@ impl Builder {
             ..Default::default()
         };
 
-        pj.retry = self.retry.clone();
+        pj.retry = self.retry;
         pj.queue = self.queue.clone();
         pj.args = self.args.clone().map(|a| a.to_string());
 
@@ -142,7 +142,7 @@ impl PeriodicJob {
     fn hydrate_attributes(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.cron_schedule = Some(Cron::from_str(&self.cron)?);
         self.json_args = if let Some(ref args) = self.args {
-            Some(serde_json::from_str(&args)?)
+            Some(serde_json::from_str(args)?)
         } else {
             Some(JsonValue::Null)
         };
@@ -203,7 +203,7 @@ impl PeriodicJob {
             jid: new_jid(),
             created_at: chrono::Utc::now().timestamp() as f64,
             enqueued_at: None,
-            retry: self.retry.clone().unwrap_or(false),
+            retry: self.retry.unwrap_or(false),
             args,
 
             // Make default eventually...
