@@ -74,12 +74,12 @@ impl EnqueueOpts {
 
         Ok(Job {
             queue: self.queue.clone(),
-            class: class,
+            class,
             jid: new_jid(),
             created_at: chrono::Utc::now().timestamp() as f64,
             enqueued_at: None,
             retry: self.retry,
-            args: args,
+            args,
 
             // Make default eventually...
             error_message: None,
@@ -188,6 +188,7 @@ where
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn into_opts(&self) -> EnqueueOpts {
         self.into()
     }
@@ -221,6 +222,12 @@ impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
             queue: opts.queue.clone(),
             unique_for: opts.unique_for,
         }
+    }
+}
+
+impl<Args, W: Worker<Args>> Default for WorkerOpts<Args, W> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -291,6 +298,7 @@ pub trait Worker<Args>: Send + Sync {
 // I'm sure this has a fancy name, but I don't know what it is.
 #[derive(Clone)]
 pub struct WorkerRef {
+    #[allow(clippy::type_complexity)]
     work_fn: Arc<
         Box<
             dyn Fn(
@@ -330,7 +338,7 @@ where
     };
 
     let args: Args = serde_json::from_value(args)?;
-    Ok(worker.perform(args).await?)
+    worker.perform(args).await
 }
 
 impl WorkerRef {
@@ -345,7 +353,7 @@ impl WorkerRef {
                 let worker = worker.clone();
                 move |args: JsonValue| {
                     let worker = worker.clone();
-                    Box::pin(async move { Ok(invoke_worker(args, worker).await?) })
+                    Box::pin(async move { invoke_worker(args, worker).await })
                 }
             })),
             max_retries: worker.max_retries(),

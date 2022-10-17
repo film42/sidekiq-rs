@@ -30,7 +30,7 @@ impl ChainIter {
     pub async fn next(&self, job: &Job, worker: Arc<WorkerRef>, redis: RedisPool) -> ServerResult {
         let stack = self.stack.read().await;
 
-        if let Some(ref middleware) = stack.get(self.index) {
+        if let Some(middleware) = stack.get(self.index) {
             middleware
                 .call(
                     ChainIter {

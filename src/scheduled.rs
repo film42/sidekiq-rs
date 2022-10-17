@@ -56,7 +56,7 @@ impl Scheduled {
         for periodic_job in &periodic_jobs {
             let pj = PeriodicJob::from_periodic_job_string(periodic_job.clone())?;
 
-            if pj.update(&mut *conn, &periodic_job).await? {
+            if pj.update(&mut *conn, periodic_job).await? {
                 let job = pj.into_job();
                 let work = UnitOfWork::from_job(job);
 
