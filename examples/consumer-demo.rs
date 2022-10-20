@@ -1,10 +1,9 @@
 use async_trait::async_trait;
 use bb8::Pool;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sidekiq::{
-    periodic, ChainIter, Job, Processor, RedisConnectionManager, ServerMiddleware, ServerResult,
-    Worker, WorkerRef,
+    ChainIter, Job, Processor, RedisConnectionManager, ServerMiddleware, ServerResult, Worker,
+    WorkerRef,
 };
 use slog::{error, info, o, Drain};
 use std::sync::Arc;
@@ -114,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
-    let mut redis = Pool::builder().build(manager).await?;
+    let redis = Pool::builder().build(manager).await?;
     //
     //    tokio::spawn({
     //        let mut redis = redis.clone();
