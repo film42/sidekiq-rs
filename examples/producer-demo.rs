@@ -1,12 +1,10 @@
 use async_trait::async_trait;
 use bb8::Pool;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sidekiq::{
-    periodic, ChainIter, Job, Processor, RedisConnectionManager, ServerMiddleware, ServerResult,
-    Worker, WorkerRef,
+    ChainIter, Job, RedisConnectionManager, ServerMiddleware, ServerResult, Worker, WorkerRef,
 };
-use slog::{error, info, o, Drain};
+use slog::{error, info};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -26,10 +24,6 @@ struct PaymentReportWorker {
 }
 
 impl PaymentReportWorker {
-    fn new(logger: slog::Logger) -> Self {
-        Self { logger }
-    }
-
     async fn send_report(&self, user_guid: String) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: Some actual work goes here...
         info!(self.logger, "Sending payment report to user"; "user_guid" => user_guid, "class_name" => Self::class_name());
@@ -56,12 +50,6 @@ impl Worker<PaymentReportArgs> for PaymentReportWorker {
 
 struct FilterExpiredUsersMiddleware {
     logger: slog::Logger,
-}
-
-impl FilterExpiredUsersMiddleware {
-    fn new(logger: slog::Logger) -> Self {
-        Self { logger }
-    }
 }
 
 #[derive(Deserialize)]
@@ -107,11 +95,6 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Logger
-    let decorator = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let logger = slog::Logger::root(drain, o!());
-
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
     let mut redis = Pool::builder().build(manager).await?;
@@ -240,5 +223,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //        .await?;
     //
     //    p.run().await;
-    Ok(())
 }
