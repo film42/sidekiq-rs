@@ -92,6 +92,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
             )
             .await?;
+
+            sidekiq::opts()
+                .queue("other-app")
+                .unique_for(std::time::Duration::from_secs(60))
+                .unique_hash_for_args("CUSTOMER-123".to_string())
+                .perform_async(
+                    &mut redis,
+                    "SomeUniqueWorkerThatLivesSomewhereElse".to_string(),
+                    CustomerNotification {
+                        customer_guid: "CST-123".to_string(),
+                        date_string: date_string.clone(),
+                    },
+                )
+                .await?;
         }
     }
 
