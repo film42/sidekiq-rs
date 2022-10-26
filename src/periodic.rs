@@ -214,6 +214,7 @@ impl PeriodicJob {
 
             // Meta data not used in periodic jobs right now...
             unique_for: None,
+            unique_hash_for_args: None,
         }
     }
 }

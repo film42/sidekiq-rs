@@ -31,6 +31,7 @@ pub fn opts() -> EnqueueOpts {
         queue: "default".into(),
         retry: true,
         unique_for: None,
+        unique_hash_for_args: None,
     }
 }
 
@@ -38,6 +39,7 @@ pub struct EnqueueOpts {
     queue: String,
     retry: bool,
     unique_for: Option<std::time::Duration>,
+    unique_hash_for_args: Option<String>,
 }
 
 impl EnqueueOpts {
@@ -54,6 +56,13 @@ impl EnqueueOpts {
     pub fn unique_for(self, unique_for: std::time::Duration) -> Self {
         Self {
             unique_for: Some(unique_for),
+            ..self
+        }
+    }
+
+    pub fn unique_hash_for_args(self, unique_hash: String) -> Self {
+        Self {
+            unique_hash_for_args: Some(unique_hash),
             ..self
         }
     }
@@ -89,6 +98,7 @@ impl EnqueueOpts {
 
             // Meta for enqueueing
             unique_for: self.unique_for,
+            unique_hash_for_args: self.unique_hash_for_args.clone(),
         })
     }
 
@@ -104,7 +114,7 @@ impl EnqueueOpts {
     }
 
     pub async fn perform_in(
-        &self,
+        self,
         redis: &mut RedisPool,
         class: String,
         duration: std::time::Duration,
@@ -181,6 +191,13 @@ where
         }
     }
 
+    pub fn unique_hash_for_args(&self, args: &Args) -> Result<String, Box<dyn std::error::Error>>
+    where
+        Args: serde::Serialize,
+    {
+        W::unique_hash_for_args(&args)
+    }
+
     pub fn unique_for(self, unique_for: std::time::Duration) -> Self {
         Self {
             unique_for: Some(unique_for),
@@ -196,21 +213,34 @@ where
     pub async fn perform_async(
         &self,
         redis: &mut RedisPool,
-        args: impl serde::Serialize + Send + 'static,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.into_opts()
-            .perform_async(redis, W::class_name(), args)
-            .await
+        args: Args,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        Args: serde::Serialize + Send + 'static,
+    {
+        let mut opts = self.into_opts();
+        if self.unique_for.is_some() {
+            let hash = self.unique_hash_for_args(&args)?;
+            opts = opts.unique_hash_for_args(hash);
+        }
+        opts.perform_async(redis, W::class_name(), args).await
     }
 
     pub async fn perform_in(
         &self,
         redis: &mut RedisPool,
         duration: std::time::Duration,
-        args: impl serde::Serialize + Send + 'static,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.into_opts()
-            .perform_in(redis, W::class_name(), duration, args)
+        args: Args,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        Args: serde::Serialize + Send + 'static,
+    {
+        let mut opts = self.into_opts();
+        if self.unique_for.is_some() {
+            let hash = self.unique_hash_for_args(&args)?;
+            opts = opts.unique_hash_for_args(hash);
+        }
+        opts.perform_in(redis, W::class_name(), duration, args)
             .await
     }
 }
@@ -221,6 +251,7 @@ impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
             retry: opts.retry,
             queue: opts.queue.clone(),
             unique_for: opts.unique_for,
+            unique_hash_for_args: None,
         }
     }
 }
@@ -252,6 +283,14 @@ pub trait Worker<Args>: Send + Sync {
     // retry middleware through a Box<dyn Worker>.
     fn max_retries(&self) -> usize {
         25
+    }
+
+    fn unique_hash_for_args(args: &Args) -> Result<String, Box<dyn std::error::Error>>
+    where
+        Args: serde::Serialize,
+    {
+        let args_as_json_string: String = serde_json::to_string(args)?;
+        Ok(format!("{:x}", Sha256::digest(&args_as_json_string)))
     }
 
     /// Derive a class_name from the Worker type to be used with sidekiq. By default
@@ -400,6 +439,7 @@ pub struct Job {
 
     #[serde(skip)]
     pub unique_for: Option<std::time::Duration>,
+    pub unique_hash_for_args: Option<String>,
 }
 
 #[derive(Debug)]
@@ -434,21 +474,21 @@ impl UnitOfWork {
         job.enqueued_at = Some(chrono::Utc::now().timestamp() as f64);
 
         if let Some(ref duration) = job.unique_for {
-            // Check to see if this is unique for the given duration.
-            // Even though SET k v NX EQ ttl isn't the best locking
-            // mechanism, I think it's "good enough" to prove this out.
-            let args_as_json_string: String = serde_json::to_string(&job.args)?;
-            let args_hash = format!("{:x}", Sha256::digest(&args_as_json_string));
-            let redis_key = format!(
-                "sidekiq:unique:{}:{}:{}",
-                &job.queue, &job.class, &args_hash
-            );
-            if let redis::RedisValue::Nil = redis
-                .set_nx_ex(redis_key, "".into(), duration.as_secs() as usize)
-                .await?
-            {
-                // This job has already been enqueued. Do not submit it to redis.
-                return Ok(());
+            if let Some(ref args_hash) = job.unique_hash_for_args {
+                // Check to see if this is unique for the given duration.
+                // Even though SET k v NX EQ ttl isn't the best locking
+                // mechanism, I think it's "good enough" to prove this out.
+                let redis_key = format!(
+                    "sidekiq:unique:{}:{}:{}",
+                    &job.queue, &job.class, &args_hash
+                );
+                if let redis::RedisValue::Nil = redis
+                    .set_nx_ex(redis_key, "".into(), duration.as_secs() as usize)
+                    .await?
+                {
+                    // This job has already been enqueued. Do not submit it to redis.
+                    return Ok(());
+                }
             }
         }
 
