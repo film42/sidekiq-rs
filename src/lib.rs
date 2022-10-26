@@ -195,7 +195,7 @@ where
     where
         Args: serde::Serialize,
     {
-        W::unique_hash_for_args(&args)
+        W::unique_hash_for_args(args)
     }
 
     pub fn unique_for(self, unique_for: std::time::Duration) -> Self {
