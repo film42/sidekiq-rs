@@ -232,6 +232,7 @@ mod test {
             retry_count: None,
             retried_at: None,
             unique_for: None,
+            unique_hash_for_args: None,
         }
     }
 
