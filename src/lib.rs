@@ -423,7 +423,7 @@ impl UnitOfWork {
 
     pub async fn enqueue(&self, redis: &mut RedisPool) -> Result<(), Box<dyn std::error::Error>> {
         let mut redis = redis.get().await?;
-        self.enqueue_direct(&mut *redis).await
+        self.enqueue_direct(&mut redis).await
     }
 
     async fn enqueue_direct(

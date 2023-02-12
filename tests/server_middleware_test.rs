@@ -80,7 +80,7 @@ mod test {
             if self.should_halt {
                 return Ok(());
             } else {
-                return Ok(chain.next(job, worker, redis).await?);
+                return chain.next(job, worker, redis).await;
             }
         }
     }

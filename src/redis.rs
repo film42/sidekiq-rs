@@ -144,11 +144,11 @@ impl RedisConnection {
         keys: Vec<String>,
         timeout: usize,
     ) -> Result<Option<(String, String)>, RedisError> {
-        Ok(self
+        self
             .connection
             .brpop(self.namespaced_keys(keys), timeout)
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub fn cmd_with_key(&mut self, cmd: &str, key: String) -> redis::Cmd {
@@ -158,35 +158,35 @@ impl RedisConnection {
     }
 
     pub async fn del(&mut self, key: String) -> Result<usize, RedisError> {
-        Ok(self
+        self
             .connection
             .del(self.namespaced_key(key))
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub async fn expire(&mut self, key: String, value: usize) -> Result<usize, RedisError> {
-        Ok(self
+        self
             .connection
             .expire(self.namespaced_key(key), value)
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub async fn lpush(&mut self, key: String, value: String) -> Result<(), RedisError> {
-        Ok(self
+        self
             .connection
             .lpush(self.namespaced_key(key), value)
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub async fn sadd(&mut self, key: String, value: String) -> Result<(), RedisError> {
-        Ok(self
+        self
             .connection
             .sadd(self.namespaced_key(key), value)
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub async fn set_nx_ex(
@@ -195,7 +195,7 @@ impl RedisConnection {
         value: String,
         ttl_in_seconds: usize,
     ) -> Result<RedisValue, RedisError> {
-        Ok(redis::cmd("SET")
+        redis::cmd("SET")
             .arg(self.namespaced_key(key))
             .arg(value)
             .arg("NX")
@@ -203,7 +203,7 @@ impl RedisConnection {
             .arg(ttl_in_seconds)
             .query_async(self.unnamespaced_borrow_mut())
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub async fn zrange(
@@ -212,11 +212,11 @@ impl RedisConnection {
         lower: isize,
         upper: isize,
     ) -> Result<Vec<String>, RedisError> {
-        Ok(self
+        self
             .connection
             .zrange(self.namespaced_key(key), lower, upper)
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub async fn zrangebyscore_limit<L: ToRedisArgs + Send + Sync, U: ToRedisArgs + Sync + Send>(
@@ -227,11 +227,11 @@ impl RedisConnection {
         offset: isize,
         limit: isize,
     ) -> Result<Vec<String>, RedisError> {
-        Ok(self
+        self
             .connection
             .zrangebyscore_limit(self.namespaced_key(key), lower, upper, offset, limit)
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub async fn zadd<V: ToRedisArgs + Send + Sync, S: ToRedisArgs + Send + Sync>(
@@ -240,11 +240,11 @@ impl RedisConnection {
         value: V,
         score: S,
     ) -> Result<usize, RedisError> {
-        Ok(self
+        self
             .connection
             .zadd(self.namespaced_key(key), value, score)
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub async fn zadd_ch<V: ToRedisArgs + Send + Sync, S: ToRedisArgs + Send + Sync>(
@@ -253,21 +253,21 @@ impl RedisConnection {
         value: V,
         score: S,
     ) -> Result<bool, RedisError> {
-        Ok(redis::cmd("ZADD")
+        redis::cmd("ZADD")
             .arg(self.namespaced_key(key))
             .arg("CH")
             .arg(score)
             .arg(value)
             .query_async(self.unnamespaced_borrow_mut())
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 
     pub async fn zrem(&mut self, key: String, value: String) -> Result<bool, RedisError> {
-        Ok(self
+        self
             .connection
             .zrem(self.namespaced_key(key), value)
             .await
-            .map_err(|err| self.check_connection(err))?)
+            .map_err(|err| self.check_connection(err))
     }
 }
