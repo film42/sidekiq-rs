@@ -69,8 +69,8 @@ impl ManageConnection for RedisConnectionManager {
         }
     }
 
-    fn has_broken(&self, _: &mut Self::Connection) -> bool {
-        false
+    fn has_broken(&self, conn: &mut Self::Connection) -> bool {
+        conn.has_broken()
     }
 }
 
@@ -78,6 +78,7 @@ impl ManageConnection for RedisConnectionManager {
 pub struct RedisConnection {
     connection: Connection,
     namespace: Option<String>,
+    has_broken: bool,
 }
 
 impl RedisConnection {
@@ -85,7 +86,12 @@ impl RedisConnection {
         Self {
             connection,
             namespace: None,
+            has_broken: false,
         }
+    }
+
+    pub fn has_broken(&self) -> bool {
+        self.has_broken
     }
 
     pub fn set_namespace(&mut self, namespace: String) {
@@ -96,7 +102,15 @@ impl RedisConnection {
         Self {
             connection: self.connection,
             namespace: Some(namespace),
+            has_broken: self.has_broken,
         }
+    }
+
+    fn check_connection(&mut self, err: RedisError) -> RedisError {
+        if err.is_io_error() {
+            self.has_broken = true;
+        }
+        err
     }
 
     fn namespaced_key(&self, key: String) -> String {
@@ -129,11 +143,12 @@ impl RedisConnection {
         &mut self,
         keys: Vec<String>,
         timeout: usize,
-    ) -> Result<Option<(String, String)>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<(String, String)>, RedisError> {
         Ok(self
             .connection
             .brpop(self.namespaced_keys(keys), timeout)
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
     pub fn cmd_with_key(&mut self, cmd: &str, key: String) -> redis::Cmd {
@@ -142,41 +157,36 @@ impl RedisConnection {
         c
     }
 
-    pub async fn del(&mut self, key: String) -> Result<usize, Box<dyn std::error::Error>> {
-        Ok(self.connection.del(self.namespaced_key(key)).await?)
+    pub async fn del(&mut self, key: String) -> Result<usize, RedisError> {
+        Ok(self
+            .connection
+            .del(self.namespaced_key(key))
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
-    pub async fn expire(
-        &mut self,
-        key: String,
-        value: usize,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    pub async fn expire(&mut self, key: String, value: usize) -> Result<usize, RedisError> {
         Ok(self
             .connection
             .expire(self.namespaced_key(key), value)
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
-    pub async fn lpush(
-        &mut self,
-        key: String,
-        value: String,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn lpush(&mut self, key: String, value: String) -> Result<(), RedisError> {
         Ok(self
             .connection
             .lpush(self.namespaced_key(key), value)
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
-    pub async fn sadd(
-        &mut self,
-        key: String,
-        value: String,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn sadd(&mut self, key: String, value: String) -> Result<(), RedisError> {
         Ok(self
             .connection
             .sadd(self.namespaced_key(key), value)
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
     pub async fn set_nx_ex(
@@ -184,7 +194,7 @@ impl RedisConnection {
         key: String,
         value: String,
         ttl_in_seconds: usize,
-    ) -> Result<RedisValue, Box<dyn std::error::Error>> {
+    ) -> Result<RedisValue, RedisError> {
         Ok(redis::cmd("SET")
             .arg(self.namespaced_key(key))
             .arg(value)
@@ -192,7 +202,8 @@ impl RedisConnection {
             .arg("EX")
             .arg(ttl_in_seconds)
             .query_async(self.unnamespaced_borrow_mut())
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
     pub async fn zrange(
@@ -200,11 +211,12 @@ impl RedisConnection {
         key: String,
         lower: isize,
         upper: isize,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<String>, RedisError> {
         Ok(self
             .connection
             .zrange(self.namespaced_key(key), lower, upper)
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
     pub async fn zrangebyscore_limit<L: ToRedisArgs + Send + Sync, U: ToRedisArgs + Sync + Send>(
@@ -214,11 +226,12 @@ impl RedisConnection {
         upper: U,
         offset: isize,
         limit: isize,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<String>, RedisError> {
         Ok(self
             .connection
             .zrangebyscore_limit(self.namespaced_key(key), lower, upper, offset, limit)
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
     pub async fn zadd<V: ToRedisArgs + Send + Sync, S: ToRedisArgs + Send + Sync>(
@@ -226,11 +239,12 @@ impl RedisConnection {
         key: String,
         value: V,
         score: S,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    ) -> Result<usize, RedisError> {
         Ok(self
             .connection
             .zadd(self.namespaced_key(key), value, score)
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
     pub async fn zadd_ch<V: ToRedisArgs + Send + Sync, S: ToRedisArgs + Send + Sync>(
@@ -238,24 +252,22 @@ impl RedisConnection {
         key: String,
         value: V,
         score: S,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    ) -> Result<bool, RedisError> {
         Ok(redis::cmd("ZADD")
             .arg(self.namespaced_key(key))
             .arg("CH")
             .arg(score)
             .arg(value)
             .query_async(self.unnamespaced_borrow_mut())
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 
-    pub async fn zrem(
-        &mut self,
-        key: String,
-        value: String,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    pub async fn zrem(&mut self, key: String, value: String) -> Result<bool, RedisError> {
         Ok(self
             .connection
             .zrem(self.namespaced_key(key), value)
-            .await?)
+            .await
+            .map_err(|err| self.check_connection(err))?)
     }
 }
