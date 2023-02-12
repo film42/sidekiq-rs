@@ -167,13 +167,13 @@ impl PeriodicJob {
             // when we submit it to redis. We can use this to determine if we were the lucky
             // process that changed the periodic job to its next scheduled time and enqueue
             // the job.
-            return conn
+            return Ok(conn
                 .zadd_ch(
                     "periodic".to_string(),
                     periodic_job_str,
                     next_scheduled_time,
                 )
-                .await;
+                .await?);
         }
 
         Err(format!(
