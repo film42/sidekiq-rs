@@ -7,6 +7,7 @@ pub struct Scheduled {
 }
 
 impl Scheduled {
+    #[must_use]
     pub fn new(redis: RedisPool, logger: slog::Logger) -> Self {
         Self { redis, logger }
     }

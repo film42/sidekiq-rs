@@ -27,6 +27,7 @@ impl CustomizeConnection<RedisConnection, RedisError> for NamespaceCustomizer {
     }
 }
 
+#[must_use]
 pub fn with_custom_namespace(namespace: String) -> Box<NamespaceCustomizer> {
     Box::new(NamespaceCustomizer { namespace })
 }
@@ -42,7 +43,7 @@ impl RedisConnectionManager {
     /// Create a new `RedisConnectionManager`.
     /// See `redis::Client::open` for a description of the parameter types.
     pub fn new<T: IntoConnectionInfo>(info: T) -> Result<Self, RedisError> {
-        Ok(RedisConnectionManager {
+        Ok(Self {
             client: Client::open(info.into_connection_info()?)?,
         })
     }
@@ -81,6 +82,7 @@ pub struct RedisConnection {
 }
 
 impl RedisConnection {
+    #[must_use]
     pub fn new(connection: Connection) -> Self {
         Self {
             connection,
@@ -92,6 +94,7 @@ impl RedisConnection {
         self.namespace = Some(namespace);
     }
 
+    #[must_use]
     pub fn with_namespace(self, namespace: String) -> Self {
         Self {
             connection: self.connection,

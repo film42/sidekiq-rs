@@ -58,13 +58,15 @@ impl Builder {
             JsonValue::Array(vec![args])
         };
 
-        Ok(Builder {
+        Ok(Self {
             args: Some(args),
             ..self
         })
     }
-    pub fn retry(self, retry: bool) -> Builder {
-        Builder {
+
+    #[must_use]
+    pub fn retry(self, retry: bool) -> Self {
+        Self {
             retry: Some(retry),
             ..self
         }
@@ -183,6 +185,7 @@ impl PeriodicJob {
         .into())
     }
 
+    #[must_use]
     pub fn next_scheduled_time(&self) -> Option<f64> {
         if let Some(ref cron_sched) = self.cron_schedule {
             cron_sched
@@ -194,6 +197,7 @@ impl PeriodicJob {
         }
     }
 
+    #[must_use]
     pub fn into_job(&self) -> Job {
         let args = self.json_args.clone().expect("always set in contructor");
 

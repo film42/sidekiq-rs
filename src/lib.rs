@@ -26,6 +26,7 @@ pub use processor::{Processor, WorkFetcher};
 pub use scheduled::Scheduled;
 pub use stats::{Counter, StatsPublisher};
 
+#[must_use]
 pub fn opts() -> EnqueueOpts {
     EnqueueOpts {
         queue: "default".into(),
@@ -41,16 +42,20 @@ pub struct EnqueueOpts {
 }
 
 impl EnqueueOpts {
+    #[must_use]
     pub fn queue<S: Into<String>>(self, queue: S) -> Self {
         Self {
             queue: queue.into(),
             ..self
         }
     }
+
+    #[must_use]
     pub fn retry(self, retry: bool) -> Self {
         Self { retry, ..self }
     }
 
+    #[must_use]
     pub fn unique_for(self, unique_for: std::time::Duration) -> Self {
         Self {
             unique_for: Some(unique_for),
@@ -94,7 +99,7 @@ impl EnqueueOpts {
 
     pub async fn perform_async(
         self,
-        redis: &mut RedisPool,
+        redis: &RedisPool,
         class: String,
         args: impl serde::Serialize,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -105,7 +110,7 @@ impl EnqueueOpts {
 
     pub async fn perform_in(
         &self,
-        redis: &mut RedisPool,
+        redis: &RedisPool,
         class: String,
         duration: std::time::Duration,
         args: impl serde::Serialize,
@@ -119,7 +124,7 @@ impl EnqueueOpts {
 /// Helper function for enqueueing a worker into sidekiq.
 /// This can be used to enqueue a job for a ruby sidekiq worker to process.
 pub async fn perform_async(
-    redis: &mut RedisPool,
+    redis: &RedisPool,
     class: String,
     queue: String,
     args: impl serde::Serialize,
@@ -130,7 +135,7 @@ pub async fn perform_async(
 /// Helper function for enqueueing a worker into sidekiq.
 /// This can be used to enqueue a job for a ruby sidekiq worker to process.
 pub async fn perform_in(
-    redis: &mut RedisPool,
+    redis: &RedisPool,
     duration: std::time::Duration,
     class: String,
     queue: String,
@@ -160,6 +165,7 @@ impl<Args, W> WorkerOpts<Args, W>
 where
     W: Worker<Args>,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             queue: "default".into(),
@@ -170,10 +176,12 @@ where
         }
     }
 
+    #[must_use]
     pub fn retry(self, retry: bool) -> Self {
         Self { retry, ..self }
     }
 
+    #[must_use]
     pub fn queue<S: Into<String>>(self, queue: S) -> Self {
         Self {
             queue: queue.into(),
@@ -181,6 +189,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn unique_for(self, unique_for: std::time::Duration) -> Self {
         Self {
             unique_for: Some(unique_for),
@@ -195,7 +204,7 @@ where
 
     pub async fn perform_async(
         &self,
-        redis: &mut RedisPool,
+        redis: &RedisPool,
         args: impl serde::Serialize + Send + 'static,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.into_opts()
@@ -205,7 +214,7 @@ where
 
     pub async fn perform_in(
         &self,
-        redis: &mut RedisPool,
+        redis: &RedisPool,
         duration: std::time::Duration,
         args: impl serde::Serialize + Send + 'static,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -241,6 +250,7 @@ pub trait Worker<Args>: Send + Sync {
         false
     }
 
+    #[must_use]
     fn opts() -> WorkerOpts<Args, Self>
     where
         Self: Sized,
@@ -256,6 +266,7 @@ pub trait Worker<Args>: Send + Sync {
 
     /// Derive a class_name from the Worker type to be used with sidekiq. By default
     /// this method will
+    #[must_use]
     fn class_name() -> String
     where
         Self: Sized,
@@ -266,10 +277,7 @@ pub trait Worker<Args>: Send + Sync {
         name.to_upper_camel_case()
     }
 
-    async fn perform_async(
-        redis: &mut RedisPool,
-        args: Args,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    async fn perform_async(redis: &RedisPool, args: Args) -> Result<(), Box<dyn std::error::Error>>
     where
         Self: Sized,
         Args: Send + Sync + serde::Serialize + 'static,
@@ -278,7 +286,7 @@ pub trait Worker<Args>: Send + Sync {
     }
 
     async fn perform_in(
-        redis: &mut RedisPool,
+        redis: &RedisPool,
         duration: std::time::Duration,
         args: Args,
     ) -> Result<(), Box<dyn std::error::Error>>
@@ -360,6 +368,7 @@ impl WorkerRef {
         }
     }
 
+    #[must_use]
     pub fn max_retries(&self) -> usize {
         self.max_retries
     }
@@ -409,8 +418,9 @@ pub struct UnitOfWork {
 }
 
 impl UnitOfWork {
+    #[must_use]
     pub fn from_job(job: Job) -> Self {
-        UnitOfWork {
+        Self {
             queue: format!("queue:{}", &job.queue),
             job,
         }
@@ -421,7 +431,7 @@ impl UnitOfWork {
         Ok(Self::from_job(job))
     }
 
-    pub async fn enqueue(&self, redis: &mut RedisPool) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn enqueue(&self, redis: &RedisPool) -> Result<(), Box<dyn std::error::Error>> {
         let mut redis = redis.get().await?;
         self.enqueue_direct(&mut redis).await
     }
@@ -460,10 +470,7 @@ impl UnitOfWork {
         Ok(())
     }
 
-    pub async fn reenqueue(
-        &mut self,
-        redis: &mut RedisPool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn reenqueue(&mut self, redis: &RedisPool) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(retry_count) = self.job.retry_count {
             redis
                 .get()
@@ -488,7 +495,7 @@ impl UnitOfWork {
 
     pub async fn schedule(
         &mut self,
-        redis: &mut RedisPool,
+        redis: &RedisPool,
         duration: std::time::Duration,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let enqueue_at = chrono::Utc::now() + chrono::Duration::from_std(duration)?;

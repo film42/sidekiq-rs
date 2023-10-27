@@ -10,20 +10,24 @@ pub struct Counter {
 }
 
 impl Counter {
+    #[must_use]
     pub fn new(n: usize) -> Self {
         Self {
             count: Arc::new(AtomicUsize::new(n)),
         }
     }
 
+    #[must_use]
     pub fn value(&self) -> usize {
         self.count.load(Ordering::SeqCst)
     }
 
+    #[must_use]
     pub fn decrby(&self, n: usize) -> usize {
         self.count.fetch_sub(n, Ordering::SeqCst)
     }
 
+    #[must_use]
     pub fn incrby(&self, n: usize) -> usize {
         self.count.fetch_add(n, Ordering::SeqCst)
     }
@@ -68,6 +72,7 @@ fn generate_identity(hostname: &String) -> String {
 }
 
 impl StatsPublisher {
+    #[must_use]
     pub fn new(hostname: String, queues: Vec<String>, busy_jobs: Counter) -> Self {
         let identity = generate_identity(&hostname);
         let started_at = chrono::Utc::now();
