@@ -22,14 +22,12 @@ impl Counter {
         self.count.load(Ordering::SeqCst)
     }
 
-    #[must_use]
-    pub fn decrby(&self, n: usize) -> usize {
-        self.count.fetch_sub(n, Ordering::SeqCst)
+    pub fn decrby(&self, n: usize) {
+        self.count.fetch_sub(n, Ordering::SeqCst);
     }
 
-    #[must_use]
-    pub fn incrby(&self, n: usize) -> usize {
-        self.count.fetch_add(n, Ordering::SeqCst)
+    pub fn incrby(&self, n: usize) {
+        self.count.fetch_add(n, Ordering::SeqCst);
     }
 }
 
