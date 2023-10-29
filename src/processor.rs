@@ -25,6 +25,7 @@ pub struct Processor {
 }
 
 impl Processor {
+    #[must_use]
     pub fn new(redis: RedisPool, logger: slog::Logger, queues: Vec<String>) -> Self {
         let busy_jobs = Counter::new(0);
 
@@ -102,7 +103,7 @@ impl Processor {
                 "queue" => &work.job.queue,
                 "jid" => &work.job.jid,
             );
-            work.reenqueue(&mut self.redis).await?;
+            work.reenqueue(&self.redis).await?;
         }
 
         // TODO: Make this only say "done" when the job is successful.
@@ -235,7 +236,7 @@ impl Processor {
         });
 
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
 
@@ -243,6 +244,6 @@ impl Processor {
     where
         M: ServerMiddleware + Send + Sync + 'static,
     {
-        self.chain.using(Box::new(middleware)).await
+        self.chain.using(Box::new(middleware)).await;
     }
 }

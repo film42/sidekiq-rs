@@ -165,7 +165,7 @@ impl ServerMiddleware for RetryMiddleware {
         chain: ChainIter,
         job: &Job,
         worker: Arc<WorkerRef>,
-        mut redis: RedisPool,
+        redis: RedisPool,
     ) -> ServerResult {
         let max_retries = worker.max_retries();
 
@@ -199,7 +199,7 @@ impl ServerMiddleware for RetryMiddleware {
                 "err" => &job.error_message,
             );
 
-            UnitOfWork::from_job(job).reenqueue(&mut redis).await?;
+            UnitOfWork::from_job(job).reenqueue(&redis).await?;
         }
 
         Ok(())
