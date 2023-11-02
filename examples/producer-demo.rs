@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use sidekiq::{
     ChainIter, Job, RedisConnectionManager, ServerMiddleware, ServerResult, Worker, WorkerRef,
 };
-use slog::{error, info};
 use std::sync::Arc;
+use tracing::{error, info};
 
 #[derive(Clone)]
 struct HelloWorker;
@@ -19,14 +19,12 @@ impl Worker<()> for HelloWorker {
 }
 
 #[derive(Clone)]
-struct PaymentReportWorker {
-    logger: slog::Logger,
-}
+struct PaymentReportWorker {}
 
 impl PaymentReportWorker {
     async fn send_report(&self, user_guid: String) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: Some actual work goes here...
-        info!(self.logger, "Sending payment report to user"; "user_guid" => user_guid, "class_name" => Self::class_name());
+        info!({"user_guid" = user_guid, "class_name" = Self::class_name()}, "Sending payment report to user");
 
         Ok(())
     }
@@ -48,9 +46,7 @@ impl Worker<PaymentReportArgs> for PaymentReportWorker {
     }
 }
 
-struct FilterExpiredUsersMiddleware {
-    logger: slog::Logger,
-}
+struct FilterExpiredUsersMiddleware {}
 
 #[derive(Deserialize)]
 struct FiltereExpiredUsersArgs {
@@ -78,12 +74,12 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
         // If we can safely deserialize then attempt to filter based on user guid.
         if let Ok((filter,)) = args {
             if filter.is_expired() {
-                error!(
-                    self.logger,
-                    "Detected an expired user, skipping this job";
-                    "class" => &job.class,
-                    "jid" => &job.jid,
-                    "user_guid" => filter.user_guid,
+                error!({
+                        "class" = &job.class,
+                        "jid" = &job.jid,
+                        "user_guid" = filter.user_guid
+                    },
+                    "Detected an expired user, skipping this job"
                 );
                 return Ok(());
             }
@@ -95,6 +91,8 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
     let mut redis = Pool::builder().build(manager).await?;

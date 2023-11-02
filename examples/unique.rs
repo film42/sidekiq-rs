@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use bb8::Pool;
 use serde::{Deserialize, Serialize};
 use sidekiq::{Processor, RedisConnectionManager, Worker};
-use slog::{o, Drain};
 
 #[derive(Clone)]
 struct CustomerNotificationWorker;
@@ -28,17 +27,14 @@ struct CustomerNotification {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Logger
-    let decorator = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let logger = slog::Logger::root(drain, o!());
+    tracing_subscriber::fmt::init();
 
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
     let mut redis = Pool::builder().build(manager).await?;
 
     // Sidekiq server
-    let mut p = Processor::new(redis.clone(), logger.clone(), vec!["customers".to_string()]);
+    let mut p = Processor::new(redis.clone(), vec!["customers".to_string()]);
 
     // Add known workers
     p.register(CustomerNotificationWorker);
@@ -61,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     CustomerNotificationWorker::opts()
         .unique_for(std::time::Duration::from_secs(90))
         .perform_async(
-            &mut redis,
+            &redis,
             CustomerNotification {
                 customer_guid: "CST-123".to_string(),
             },

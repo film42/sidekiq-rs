@@ -3,7 +3,6 @@ mod test {
     use async_trait::async_trait;
     use bb8::Pool;
     use sidekiq::{Processor, RedisConnectionManager, RedisPool, WorkFetcher, Worker};
-    use slog::{o, Drain};
     use std::sync::{Arc, Mutex};
 
     #[async_trait]
@@ -22,21 +21,16 @@ mod test {
         }
     }
 
-    async fn new_base_processor(queue: String) -> (Processor, RedisPool, slog::Logger) {
-        // Logger
-        let decorator = slog_term::PlainSyncDecorator::new(std::io::stdout());
-        let drain = slog_term::FullFormat::new(decorator).build().fuse();
-        let logger = slog::Logger::root(drain, o!());
-
+    async fn new_base_processor(queue: String) -> (Processor, RedisPool) {
         // Redis
         let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
         let redis = Pool::builder().build(manager).await.unwrap();
         redis.flushall().await;
 
         // Sidekiq server
-        let p = Processor::new(redis.clone(), logger.clone(), vec![queue]);
+        let p = Processor::new(redis.clone(), vec![queue]);
 
-        (p, redis, logger)
+        (p, redis)
     }
 
     #[tokio::test]
@@ -60,7 +54,7 @@ mod test {
             did_process: Arc::new(Mutex::new(false)),
         };
         let queue = "random123".to_string();
-        let (mut p, mut redis, _) = new_base_processor(queue.clone()).await;
+        let (mut p, mut redis) = new_base_processor(queue.clone()).await;
 
         p.register(worker.clone());
 

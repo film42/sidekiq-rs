@@ -2,9 +2,9 @@ use crate::{
     periodic::PeriodicJob, Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware,
     StatsPublisher, UnitOfWork, Worker, WorkerRef,
 };
-use slog::{error, info};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use tracing::{error, info};
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum WorkFetcher {
@@ -19,24 +19,22 @@ pub struct Processor {
     human_readable_queues: Vec<String>,
     periodic_jobs: Vec<PeriodicJob>,
     workers: BTreeMap<String, Arc<WorkerRef>>,
-    logger: slog::Logger,
     chain: Chain,
     busy_jobs: Counter,
 }
 
 impl Processor {
     #[must_use]
-    pub fn new(redis: RedisPool, logger: slog::Logger, queues: Vec<String>) -> Self {
+    pub fn new(redis: RedisPool, queues: Vec<String>) -> Self {
         let busy_jobs = Counter::new(0);
 
         Self {
-            chain: Chain::new_with_stats(logger.clone(), busy_jobs.clone()),
+            chain: Chain::new_with_stats(busy_jobs.clone()),
             workers: BTreeMap::new(),
             periodic_jobs: vec![],
             busy_jobs,
 
             redis,
-            logger,
             queues: queues
                 .iter()
                 .map(|queue| format!("queue:{queue}"))
@@ -83,39 +81,36 @@ impl Processor {
 
         let started = std::time::Instant::now();
 
-        info!(self.logger, "sidekiq";
-            "status" => "start",
-            "class" => &work.job.class,
-            "queue" => &work.job.queue,
-            "jid" => &work.job.jid
-        );
+        info!({
+            "status" = "start",
+            "class" = &work.job.class,
+            "queue" = &work.job.queue,
+            "jid" = &work.job.jid
+        }, "sidekiq");
 
         if let Some(worker) = self.workers.get_mut(&work.job.class) {
             self.chain
                 .call(&work.job, worker.clone(), self.redis.clone())
                 .await?;
         } else {
-            error!(
-                self.logger,
-                "!!! Worker not found !!!";
-                "staus" => "fail",
-                "class" => &work.job.class,
-                "queue" => &work.job.queue,
-                "jid" => &work.job.jid,
-            );
+            error!({
+                "staus" = "fail",
+                "class" = &work.job.class,
+                "queue" = &work.job.queue,
+                "jid" = &work.job.jid
+            },"!!! Worker not found !!!");
             work.reenqueue(&self.redis).await?;
         }
 
         // TODO: Make this only say "done" when the job is successful.
         // We might need to change the ChainIter to return the final job and
         // detect any retries?
-        info!(self.logger, "sidekiq";
-            "elapsed" => format!("{:?}", started.elapsed()),
-            "status" => "done",
-            "class" => &work.job.class,
-            "queue" => &work.job.queue,
-            "jid" => &work.job.jid,
-        );
+        info!({
+            "elapsed" = format!("{:?}", started.elapsed()),
+            "status" = "done",
+            "class" = &work.job.class,
+            "queue" = &work.job.queue,
+            "jid" = &work.job.jid}, "sidekiq");
 
         Ok(WorkFetcher::Done)
     }
@@ -140,13 +135,13 @@ impl Processor {
         let mut conn = self.redis.get().await?;
         periodic_job.insert(&mut conn).await?;
 
-        info!(self.logger, "Inserting periodic job";
-            "args" => &periodic_job.args,
-            "class" => &periodic_job.class,
-            "queue" => &periodic_job.queue,
-            "name" => &periodic_job.name,
-            "cron" => &periodic_job.cron,
-        );
+        info!({
+            "args" = &periodic_job.args,
+            "class" = &periodic_job.class,
+            "queue" = &periodic_job.queue,
+            "name" = &periodic_job.name,
+            "cron" = &periodic_job.cron,
+        },"Inserting periodic job");
 
         Ok(())
     }
@@ -160,12 +155,11 @@ impl Processor {
         for _ in 0..cpu_count {
             tokio::spawn({
                 let mut processor = self.clone();
-                let logger = self.logger.clone();
 
                 async move {
                     loop {
                         if let Err(err) = processor.process_one().await {
-                            error!(logger, "Error leaked out the bottom: {:?}", err);
+                            error!("Error leaked out the bottom: {:?}", err);
                         }
                     }
                 }
@@ -174,7 +168,6 @@ impl Processor {
 
         // Start sidekiq-web metrics publisher.
         tokio::spawn({
-            let logger = self.logger.clone();
             let redis = self.redis.clone();
             let queues = self.human_readable_queues.clone();
             let busy_jobs = self.busy_jobs.clone();
@@ -192,7 +185,7 @@ impl Processor {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
                     if let Err(err) = stats_publisher.publish_stats(redis.clone()).await {
-                        error!(logger, "Error publishing processor stats: {:?}", err);
+                        error!("Error publishing processor stats: {:?}", err);
                     }
                 }
             }
@@ -200,10 +193,9 @@ impl Processor {
 
         // Start retry and scheduled routines.
         tokio::spawn({
-            let logger = self.logger.clone();
             let redis = self.redis.clone();
             async move {
-                let sched = Scheduled::new(redis, logger.clone());
+                let sched = Scheduled::new(redis);
                 let sorted_sets = vec!["retry".to_string(), "schedule".to_string()];
 
                 loop {
@@ -211,7 +203,7 @@ impl Processor {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
                     if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await {
-                        error!(logger, "Error in scheduled poller routine: {:?}", err);
+                        error!("Error in scheduled poller routine: {:?}", err);
                     }
                 }
             }
@@ -219,17 +211,16 @@ impl Processor {
 
         // Watch for periodic jobs and enqueue jobs.
         tokio::spawn({
-            let logger = self.logger.clone();
             let redis = self.redis.clone();
             async move {
-                let sched = Scheduled::new(redis, logger.clone());
+                let sched = Scheduled::new(redis);
 
                 loop {
                     // TODO: Use process count to meet a 30 second avg.
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
 
                     if let Err(err) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
-                        error!(logger, "Error in periodic job poller routine: {:?}", err);
+                        error!("Error in periodic job poller routine: {:?}", err);
                     }
                 }
             }
