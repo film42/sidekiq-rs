@@ -1,3 +1,4 @@
+use super::Result;
 use crate::{
     periodic::PeriodicJob, Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware,
     StatsPublisher, UnitOfWork, Worker, WorkerRef,
@@ -43,7 +44,7 @@ impl Processor {
         }
     }
 
-    async fn fetch(&mut self) -> Result<Option<UnitOfWork>, Box<dyn std::error::Error>> {
+    async fn fetch(&mut self) -> Result<Option<UnitOfWork>> {
         let response: Option<(String, String)> = self
             .redis
             .get()
@@ -59,7 +60,7 @@ impl Processor {
         Ok(None)
     }
 
-    pub async fn process_one(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn process_one(&mut self) -> Result<()> {
         loop {
             if let WorkFetcher::NoWorkFound = self.process_one_tick_once().await? {
                 continue;
@@ -69,9 +70,7 @@ impl Processor {
         }
     }
 
-    pub async fn process_one_tick_once(
-        &mut self,
-    ) -> Result<WorkFetcher, Box<dyn std::error::Error>> {
+    pub async fn process_one_tick_once(&mut self) -> Result<WorkFetcher> {
         let work = self.fetch().await?;
 
         if work.is_none() {
@@ -126,10 +125,7 @@ impl Processor {
             .insert(W::class_name(), Arc::new(WorkerRef::wrap(Arc::new(worker))));
     }
 
-    pub(crate) async fn register_periodic(
-        &mut self,
-        periodic_job: PeriodicJob,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) async fn register_periodic(&mut self, periodic_job: PeriodicJob) -> Result<()> {
         self.periodic_jobs.push(periodic_job.clone());
 
         let mut conn = self.redis.get().await?;

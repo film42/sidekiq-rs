@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use bb8::Pool;
 use serde::{Deserialize, Serialize};
-use sidekiq::{Processor, RedisConnectionManager, Worker};
+use sidekiq::{Processor, RedisConnectionManager, Result, Worker};
 
 #[derive(Clone)]
 struct CustomerNotificationWorker;
@@ -15,7 +15,7 @@ impl Worker<CustomerNotification> for CustomerNotificationWorker {
             .unique_for(std::time::Duration::from_secs(30))
     }
 
-    async fn perform(&self, _args: CustomerNotification) -> Result<(), Box<dyn std::error::Error>> {
+    async fn perform(&self, _args: CustomerNotification) -> Result<()> {
         Ok(())
     }
 }
@@ -26,7 +26,7 @@ struct CustomerNotification {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     // Redis

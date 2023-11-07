@@ -18,6 +18,7 @@ enqueue time making it easy to change the queue name, for example, should you ne
 
 ```rust
 use tracing::info;
+use sidekiq::Result;
 
 #[derive(Clone)]
 struct PaymentReportWorker {}
@@ -27,7 +28,7 @@ impl PaymentReportWorker {
         Self { }
     }
 
-    async fn send_report(&self, user_guid: String) -> Result<(), Box<dyn std::error::Error>> {
+    async fn send_report(&self, user_guid: String) -> Result<()> {
         // TODO: Some actual work goes here...
         info!({"user_guid" = user_guid}, "Sending payment report to user");
 
@@ -48,7 +49,7 @@ impl Worker<PaymentReportArgs> for PaymentReportWorker {
     }
 
     // Worker implementation
-    async fn perform(&self, args: PaymentReportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    async fn perform(&self, args: PaymentReportArgs) -> Result<()> {
         self.send_report(args.user_guid).await
     }
 }
@@ -267,6 +268,7 @@ etc. You can define these on your worker struct so long as they implement `Clone
 
 ```rust
 use tracing::debug;
+use sidekiq::Result;
 
 #[derive(Clone)]
 struct ExampleWorker {
@@ -276,7 +278,7 @@ struct ExampleWorker {
 
 #[async_trait]
 impl Worker<()> for ExampleWorker {
-    async fn perform(&self, args: PaymentReportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    async fn perform(&self, args: PaymentReportArgs) -> Result<()> {
         use redis::AsyncCommands;
 
         // And then they are available here...
@@ -293,7 +295,7 @@ impl Worker<()> for ExampleWorker {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
 // ...
     let mut p = Processor::new(
         redis.clone(),
@@ -315,10 +317,11 @@ of the default trait methods:
 
 ```rust
 pub struct MyWorker;
+use sidekiq::Result;
 
 #[async_trait]
 impl Worker<()> for MyWorker {
-    async fn perform(&self, _args: ()) -> ServerResult {
+    async fn perform(&self, _args: ()) -> Result<()> {
         Ok(())
     }
 

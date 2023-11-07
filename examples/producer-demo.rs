@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use bb8::Pool;
 use serde::{Deserialize, Serialize};
 use sidekiq::{
-    ChainIter, Job, RedisConnectionManager, ServerMiddleware, ServerResult, Worker, WorkerRef,
+    ChainIter, Job, RedisConnectionManager, Result, ServerMiddleware, Worker, WorkerRef,
 };
 use std::sync::Arc;
 use tracing::{error, info};
@@ -12,7 +12,7 @@ struct HelloWorker;
 
 #[async_trait]
 impl Worker<()> for HelloWorker {
-    async fn perform(&self, _args: ()) -> Result<(), Box<dyn std::error::Error>> {
+    async fn perform(&self, _args: ()) -> Result<()> {
         // I don't use any args. I do my own work.
         Ok(())
     }
@@ -22,7 +22,7 @@ impl Worker<()> for HelloWorker {
 struct PaymentReportWorker {}
 
 impl PaymentReportWorker {
-    async fn send_report(&self, user_guid: String) -> Result<(), Box<dyn std::error::Error>> {
+    async fn send_report(&self, user_guid: String) -> Result<()> {
         // TODO: Some actual work goes here...
         info!({"user_guid" = user_guid, "class_name" = Self::class_name()}, "Sending payment report to user");
 
@@ -41,7 +41,7 @@ impl Worker<PaymentReportArgs> for PaymentReportWorker {
         sidekiq::WorkerOpts::new().queue("yolo")
     }
 
-    async fn perform(&self, args: PaymentReportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    async fn perform(&self, args: PaymentReportArgs) -> Result<()> {
         self.send_report(args.user_guid).await
     }
 }
@@ -67,8 +67,8 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
         job: &Job,
         worker: Arc<WorkerRef>,
         redis: Pool<RedisConnectionManager>,
-    ) -> ServerResult {
-        let args: Result<(FiltereExpiredUsersArgs,), serde_json::Error> =
+    ) -> Result<()> {
+        let args: std::result::Result<(FiltereExpiredUsersArgs,), serde_json::Error> =
             serde_json::from_value(job.args.clone());
 
         // If we can safely deserialize then attempt to filter based on user guid.
@@ -90,7 +90,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     // Redis

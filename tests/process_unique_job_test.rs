@@ -2,7 +2,7 @@
 mod test {
     use async_trait::async_trait;
     use bb8::Pool;
-    use sidekiq::{Processor, RedisConnectionManager, RedisPool, WorkFetcher, Worker};
+    use sidekiq::{Processor, RedisConnectionManager, RedisPool, Result, WorkFetcher, Worker};
     use std::sync::{Arc, Mutex};
 
     #[async_trait]
@@ -42,7 +42,7 @@ mod test {
 
         #[async_trait]
         impl Worker<()> for TestWorker {
-            async fn perform(&self, _args: ()) -> Result<(), Box<dyn std::error::Error>> {
+            async fn perform(&self, _args: ()) -> Result<()> {
                 let mut this = self.did_process.lock().unwrap();
                 *this = true;
 
