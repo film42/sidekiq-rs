@@ -7,7 +7,7 @@ use sidekiq::{
     ServerMiddleware, Worker, WorkerRef,
 };
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, Level};
 
 #[derive(Clone)]
 struct HelloWorker;
@@ -112,7 +112,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
