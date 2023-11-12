@@ -65,7 +65,7 @@ impl Chain {
     pub(crate) fn new_with_stats(counter: Counter) -> Self {
         Self {
             stack: Arc::new(RwLock::new(vec![
-                Box::new(RetryMiddleware::new()),
+                Box::new(RetryMiddleware),
                 Box::new(StatsMiddleware::new(counter)),
                 Box::new(HandlerMiddleware),
             ])),
@@ -146,13 +146,7 @@ impl ServerMiddleware for HandlerMiddleware {
     }
 }
 
-struct RetryMiddleware {}
-
-impl RetryMiddleware {
-    fn new() -> Self {
-        Self {}
-    }
-}
+struct RetryMiddleware;
 
 #[async_trait]
 impl ServerMiddleware for RetryMiddleware {
