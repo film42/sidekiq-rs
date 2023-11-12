@@ -1,14 +1,15 @@
-use crate::{new_jid, Job, Processor, RedisConnection, RedisPool, Worker};
+use super::Result;
+use crate::{new_jid, Error, Job, Processor, RedisConnection, RedisPool, Worker};
 pub use cron_clock::{Schedule as Cron, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
 
-pub fn parse(cron: &str) -> Result<Cron, Box<dyn std::error::Error>> {
+pub fn parse(cron: &str) -> Result<Cron> {
     Ok(Cron::from_str(cron)?)
 }
 
-pub async fn destroy_all(redis: RedisPool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn destroy_all(redis: RedisPool) -> Result<()> {
     let mut conn = redis.get().await?;
     conn.del("periodic".to_string()).await?;
     Ok(())
@@ -22,7 +23,7 @@ pub struct Builder {
     pub(crate) cron: Cron,
 }
 
-pub fn builder(cron_str: &str) -> Result<Builder, Box<dyn std::error::Error>> {
+pub fn builder(cron_str: &str) -> Result<Builder> {
     Ok(Builder {
         name: None,
         queue: None,
@@ -45,7 +46,7 @@ impl Builder {
             ..self
         }
     }
-    pub fn args<Args>(self, args: Args) -> Result<Builder, Box<dyn std::error::Error>>
+    pub fn args<Args>(self, args: Args) -> Result<Builder>
     where
         Args: Sync + Send + for<'de> serde::Deserialize<'de> + serde::Serialize + 'static,
     {
@@ -72,11 +73,7 @@ impl Builder {
         }
     }
 
-    pub async fn register<W, Args>(
-        self,
-        processor: &mut Processor,
-        worker: W,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    pub async fn register<W, Args>(self, processor: &mut Processor, worker: W) -> Result<()>
     where
         Args: Sync + Send + for<'de> serde::Deserialize<'de> + 'static,
         W: Worker<Args> + 'static,
@@ -89,10 +86,7 @@ impl Builder {
         Ok(())
     }
 
-    pub fn into_periodic_job(
-        &self,
-        class_name: String,
-    ) -> Result<PeriodicJob, Box<dyn std::error::Error>> {
+    pub fn into_periodic_job(&self, class_name: String) -> Result<PeriodicJob> {
         let name = self
             .name
             .clone()
@@ -133,15 +127,13 @@ pub struct PeriodicJob {
 }
 
 impl PeriodicJob {
-    pub fn from_periodic_job_string(
-        periodic_job_str: String,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_periodic_job_string(periodic_job_str: String) -> Result<Self> {
         let mut pj: Self = serde_json::from_str(&periodic_job_str)?;
         pj.hydrate_attributes()?;
         Ok(pj)
     }
 
-    fn hydrate_attributes(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    fn hydrate_attributes(&mut self) -> Result<()> {
         self.cron_schedule = Some(Cron::from_str(&self.cron)?);
         self.json_args = if let Some(ref args) = self.args {
             Some(serde_json::from_str(args)?)
@@ -151,19 +143,12 @@ impl PeriodicJob {
         Ok(())
     }
 
-    pub async fn insert(
-        &self,
-        conn: &mut RedisConnection,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    pub async fn insert(&self, conn: &mut RedisConnection) -> Result<bool> {
         let payload = serde_json::to_string(self)?;
         self.update(conn, &payload).await
     }
 
-    pub async fn update(
-        &self,
-        conn: &mut RedisConnection,
-        periodic_job_str: &str,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    pub async fn update(&self, conn: &mut RedisConnection, periodic_job_str: &str) -> Result<bool> {
         if let Some(next_scheduled_time) = self.next_scheduled_time() {
             // [ZADD key CH score value] will return true/ false if the value added changed
             // when we submit it to redis. We can use this to determine if we were the lucky
@@ -178,11 +163,10 @@ impl PeriodicJob {
                 .await?);
         }
 
-        Err(format!(
+        Err(Error::Message(format!(
             "Unable to fetch next schedled time for periodic job: class: {}, name: {}",
             &self.class, &self.name
-        )
-        .into())
+        )))
     }
 
     #[must_use]

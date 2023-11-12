@@ -21,10 +21,36 @@ mod stats;
 pub use crate::redis::{
     with_custom_namespace, RedisConnection, RedisConnectionManager, RedisError, RedisPool,
 };
-pub use middleware::{ChainIter, ServerMiddleware, ServerResult};
+pub use middleware::{ChainIter, ServerMiddleware};
 pub use processor::{Processor, WorkFetcher};
 pub use scheduled::Scheduled;
 pub use stats::{Counter, StatsPublisher};
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("{0}")]
+    Message(String),
+
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+
+    #[error(transparent)]
+    CronClock(#[from] cron_clock::error::Error),
+
+    #[error(transparent)]
+    BB8(#[from] bb8::RunError<redis::RedisError>),
+
+    #[error(transparent)]
+    ChronoRange(#[from] chrono::OutOfRangeError),
+
+    #[error(transparent)]
+    Redis(#[from] redis::RedisError),
+
+    #[error(transparent)]
+    Any(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[must_use]
 pub fn opts() -> EnqueueOpts {
@@ -63,11 +89,7 @@ impl EnqueueOpts {
         }
     }
 
-    fn create_job(
-        &self,
-        class: String,
-        args: impl serde::Serialize,
-    ) -> Result<Job, Box<dyn std::error::Error>> {
+    fn create_job(&self, class: String, args: impl serde::Serialize) -> Result<Job> {
         let args = serde_json::to_value(args)?;
 
         // Ensure args are always wrapped in an array.
@@ -102,7 +124,7 @@ impl EnqueueOpts {
         redis: &RedisPool,
         class: String,
         args: impl serde::Serialize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let job = self.create_job(class, args)?;
         UnitOfWork::from_job(job).enqueue(redis).await?;
         Ok(())
@@ -114,7 +136,7 @@ impl EnqueueOpts {
         class: String,
         duration: std::time::Duration,
         args: impl serde::Serialize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let job = self.create_job(class, args)?;
         UnitOfWork::from_job(job).schedule(redis, duration).await?;
         Ok(())
@@ -128,7 +150,7 @@ pub async fn perform_async(
     class: String,
     queue: String,
     args: impl serde::Serialize,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     opts().queue(queue).perform_async(redis, class, args).await
 }
 
@@ -140,7 +162,7 @@ pub async fn perform_in(
     class: String,
     queue: String,
     args: impl serde::Serialize,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     opts()
         .queue(queue)
         .perform_in(redis, class, duration, args)
@@ -206,7 +228,7 @@ where
         &self,
         redis: &RedisPool,
         args: impl serde::Serialize + Send + 'static,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         self.into_opts()
             .perform_async(redis, W::class_name(), args)
             .await
@@ -217,7 +239,7 @@ where
         redis: &RedisPool,
         duration: std::time::Duration,
         args: impl serde::Serialize + Send + 'static,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         self.into_opts()
             .perform_in(redis, W::class_name(), duration, args)
             .await
@@ -277,7 +299,7 @@ pub trait Worker<Args>: Send + Sync {
         name.to_upper_camel_case()
     }
 
-    async fn perform_async(redis: &RedisPool, args: Args) -> Result<(), Box<dyn std::error::Error>>
+    async fn perform_async(redis: &RedisPool, args: Args) -> Result<()>
     where
         Self: Sized,
         Args: Send + Sync + serde::Serialize + 'static,
@@ -285,11 +307,7 @@ pub trait Worker<Args>: Send + Sync {
         Self::opts().perform_async(redis, args).await
     }
 
-    async fn perform_in(
-        redis: &RedisPool,
-        duration: std::time::Duration,
-        args: Args,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    async fn perform_in(redis: &RedisPool, duration: std::time::Duration, args: Args) -> Result<()>
     where
         Self: Sized,
         Args: Send + Sync + serde::Serialize + 'static,
@@ -297,7 +315,7 @@ pub trait Worker<Args>: Send + Sync {
         Self::opts().perform_in(redis, duration, args).await
     }
 
-    async fn perform(&self, args: Args) -> Result<(), Box<dyn std::error::Error>>;
+    async fn perform(&self, args: Args) -> Result<()>;
 }
 
 // We can't store a Vec<Box<dyn Worker<Args>>>, because that will only work
@@ -308,19 +326,12 @@ pub trait Worker<Args>: Send + Sync {
 pub struct WorkerRef {
     #[allow(clippy::type_complexity)]
     work_fn: Arc<
-        Box<
-            dyn Fn(
-                    JsonValue,
-                )
-                    -> Pin<Box<dyn Future<Output = Result<(), Box<dyn std::error::Error>>> + Send>>
-                + Send
-                + Sync,
-        >,
+        Box<dyn Fn(JsonValue) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync>,
     >,
     max_retries: usize,
 }
 
-async fn invoke_worker<Args, W>(args: JsonValue, worker: Arc<W>) -> ServerResult
+async fn invoke_worker<Args, W>(args: JsonValue, worker: Arc<W>) -> Result<()>
 where
     Args: Send + Sync + 'static,
     W: Worker<Args> + 'static,
@@ -373,7 +384,7 @@ impl WorkerRef {
         self.max_retries
     }
 
-    pub async fn call(&self, args: JsonValue) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn call(&self, args: JsonValue) -> Result<()> {
         (Arc::clone(&self.work_fn))(args).await
     }
 }
@@ -426,20 +437,17 @@ impl UnitOfWork {
         }
     }
 
-    pub fn from_job_string(job_str: String) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_job_string(job_str: String) -> Result<Self> {
         let job: Job = serde_json::from_str(&job_str)?;
         Ok(Self::from_job(job))
     }
 
-    pub async fn enqueue(&self, redis: &RedisPool) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn enqueue(&self, redis: &RedisPool) -> Result<()> {
         let mut redis = redis.get().await?;
         self.enqueue_direct(&mut redis).await
     }
 
-    async fn enqueue_direct(
-        &self,
-        redis: &mut RedisConnection,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn enqueue_direct(&self, redis: &mut RedisConnection) -> Result<()> {
         let mut job = self.job.clone();
         job.enqueued_at = Some(chrono::Utc::now().timestamp() as f64);
 
@@ -470,7 +478,7 @@ impl UnitOfWork {
         Ok(())
     }
 
-    pub async fn reenqueue(&mut self, redis: &RedisPool) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn reenqueue(&mut self, redis: &RedisPool) -> Result<()> {
         if let Some(retry_count) = self.job.retry_count {
             redis
                 .get()
@@ -497,7 +505,7 @@ impl UnitOfWork {
         &mut self,
         redis: &RedisPool,
         duration: std::time::Duration,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let enqueue_at = chrono::Utc::now() + chrono::Duration::from_std(duration)?;
 
         redis
@@ -527,7 +535,7 @@ mod test {
 
                 #[async_trait]
                 impl Worker<()> for TestModuleWorker {
-                    async fn perform(&self, _args: ()) -> ServerResult {
+                    async fn perform(&self, _args: ()) -> Result<()> {
                         Ok(())
                     }
                 }
@@ -536,7 +544,7 @@ mod test {
 
                 #[async_trait]
                 impl Worker<()> for TestCustomClassNameWorker {
-                    async fn perform(&self, _args: ()) -> ServerResult {
+                    async fn perform(&self, _args: ()) -> Result<()> {
                         Ok(())
                     }
 
@@ -567,7 +575,7 @@ mod test {
         );
     }
 
-    #[derive(Deserialize, Serialize, Debug)]
+    #[derive(Clone, Deserialize, Serialize, Debug)]
     struct TestArg {
         name: String,
         age: i32,
@@ -576,7 +584,7 @@ mod test {
     struct TestGenericWorker;
     #[async_trait]
     impl Worker<TestArg> for TestGenericWorker {
-        async fn perform(&self, _args: TestArg) -> ServerResult {
+        async fn perform(&self, _args: TestArg) -> Result<()> {
             Ok(())
         }
     }
@@ -584,7 +592,7 @@ mod test {
     struct TestMultiArgWorker;
     #[async_trait]
     impl Worker<(TestArg, TestArg)> for TestMultiArgWorker {
-        async fn perform(&self, _args: (TestArg, TestArg)) -> ServerResult {
+        async fn perform(&self, _args: (TestArg, TestArg)) -> Result<()> {
             Ok(())
         }
     }
@@ -595,7 +603,7 @@ mod test {
         fn disable_argument_coercion(&self) -> bool {
             true
         }
-        async fn perform(&self, _args: (TestArg,)) -> ServerResult {
+        async fn perform(&self, _args: (TestArg,)) -> Result<()> {
             Ok(())
         }
     }
@@ -606,7 +614,7 @@ mod test {
         fn disable_argument_coercion(&self) -> bool {
             true
         }
-        async fn perform(&self, _args: Vec<TestArg>) -> ServerResult {
+        async fn perform(&self, _args: Vec<TestArg>) -> Result<()> {
             Ok(())
         }
     }

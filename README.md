@@ -17,19 +17,20 @@ typed arguments. It also has custom options that will be used whenever a job is 
 enqueue time making it easy to change the queue name, for example, should you need to.
 
 ```rust
+use tracing::info;
+use sidekiq::Result;
+
 #[derive(Clone)]
-struct PaymentReportWorker {
-    logger: slog::Logger,
-}
+struct PaymentReportWorker {}
 
 impl PaymentReportWorker {
-    fn new(logger: slog::Logger) -> Self {
-        Self { logger }
+    fn new() -> Self {
+        Self { }
     }
 
-    async fn send_report(&self, user_guid: String) -> Result<(), Box<dyn std::error::Error>> {
+    async fn send_report(&self, user_guid: String) -> Result<()> {
         // TODO: Some actual work goes here...
-        info!(self.logger, "Sending payment report to user"; "user_guid" => user_guid);
+        info!({"user_guid" = user_guid}, "Sending payment report to user");
 
         Ok(())
     }
@@ -48,7 +49,7 @@ impl Worker<PaymentReportArgs> for PaymentReportWorker {
     }
 
     // Worker implementation
-    async fn perform(&self, args: PaymentReportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    async fn perform(&self, args: PaymentReportArgs) -> Result<()> {
         self.send_report(args.user_guid).await
     }
 }
@@ -122,15 +123,14 @@ let mut redis = bb8::Pool::builder().build(manager).await.unwrap();
 // Sidekiq server
 let mut p = Processor::new(
     redis,
-    logger.clone(),
     vec!["yolo".to_string(), "brolo".to_string()],
 );
 
 // Add known workers
-p.register(PaymentReportWorker::new(logger.clone()));
+p.register(PaymentReportWorker::new());
 
 // Custom Middlewares
-p.using(FilterExpiredUsersMiddleware::new(logger.clone()))
+p.using(FilterExpiredUsersMiddleware::new())
     .await;
 
 // Start the server
@@ -190,13 +190,13 @@ For example, suppose I only care about user-centric workers, and I identify thos
 `user_guid` as a parameter. With serde it's easy to validate your paramters.
 
 ```rust
-struct FilterExpiredUsersMiddleware {
-    logger: slog::Logger,
-}
+use tracing::info;
+
+struct FilterExpiredUsersMiddleware {}
 
 impl FilterExpiredUsersMiddleware {
-    fn new(logger: slog::Logger) -> Self {
-        Self { logger }
+    fn new() -> Self {
+        Self { }
     }
 }
 
@@ -227,12 +227,11 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
         // If we can safely deserialize then attempt to filter based on user guid.
         if let Ok((filter,)) = args {
             if filter.is_expired() {
-                error!(
-                    self.logger,
-                    "Detected an expired user, skipping this job";
-                    "class" => job.class,
-                    "jid" => job.jid,
-                    "user_guid" => filter.user_guid,
+                error!({
+                    "class" = job.class,
+                    "jid" = job.jid,
+                    "user_guid" = filter.user_guid },
+                    "Detected an expired user, skipping this job"
                 );
                 return Ok(());
             }
@@ -268,6 +267,9 @@ Workers will often need access to other software components like database connec
 etc. You can define these on your worker struct so long as they implement `Clone`. Example:
 
 ```rust
+use tracing::debug;
+use sidekiq::Result;
+
 #[derive(Clone)]
 struct ExampleWorker {
     redis: RedisPool,
@@ -276,7 +278,7 @@ struct ExampleWorker {
 
 #[async_trait]
 impl Worker<()> for ExampleWorker {
-    async fn perform(&self, args: PaymentReportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    async fn perform(&self, args: PaymentReportArgs) -> Result<()> {
         use redis::AsyncCommands;
 
         // And then they are available here...
@@ -288,16 +290,15 @@ impl Worker<()> for ExampleWorker {
             .incr("example_of_accessing_the_raw_redis_connection", 1)
             .await?;
 
-        debug!(self.logger, "Called this worker"; "times_called" => times_called);
+        debug!({"times_called" = times_called}, "Called this worker");
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
 // ...
     let mut p = Processor::new(
         redis.clone(),
-        logger.clone(),
         vec!["low_priority".to_string()],
     );
 
@@ -316,10 +317,11 @@ of the default trait methods:
 
 ```rust
 pub struct MyWorker;
+use sidekiq::Result;
 
 #[async_trait]
 impl Worker<()> for MyWorker {
-    async fn perform(&self, _args: ()) -> ServerResult {
+    async fn perform(&self, _args: ()) -> Result<()> {
         Ok(())
     }
 

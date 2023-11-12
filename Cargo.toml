@@ -15,13 +15,13 @@ name = "sidekiq"
 
 [dependencies]
 gethostname = "0.2"
-tokio = { version = "1", features = ["full"]}
+tokio = { version = "1", features = ["full"] }
 serde_json = { version = "1" }
 serde = { version = "1.0", features = ["derive"] }
 redis = { version = "0.22", features = ["aio", "default", "tokio-comp"] }
-async-trait = "0.1"
-slog = "2.7"
+async-trait = "0.1.74"
 slog-term = "2.9"
+thiserror = "*"
 bb8 = "0.8"
 num_cpus = "1.13"
 chrono = "0.4"
@@ -31,3 +31,6 @@ heck = "0.4"
 cron_clock = "0.8.0"
 simple-process-stats = "1.0.0"
 sha2 = "0.10.6"
+
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter", "json"] }

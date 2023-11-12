@@ -1,14 +1,13 @@
 use async_trait::async_trait;
 use bb8::Pool;
-use sidekiq::{Processor, RedisConnectionManager, Worker};
-use slog::{o, Drain};
+use sidekiq::{Processor, RedisConnectionManager, Result, Worker};
 
 #[derive(Clone)]
 struct HelloWorker;
 
 #[async_trait]
 impl Worker<()> for HelloWorker {
-    async fn perform(&self, _args: ()) -> Result<(), Box<dyn std::error::Error>> {
+    async fn perform(&self, _args: ()) -> Result<()> {
         println!("Hello, world!");
 
         Ok(())
@@ -16,11 +15,8 @@ impl Worker<()> for HelloWorker {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Logger
-    let decorator = slog_term::PlainSyncDecorator::new(std::io::stdout());
-    let drain = slog_term::FullFormat::new(decorator).build().fuse();
-    let logger = slog::Logger::root(drain, o!());
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
 
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
@@ -43,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Sidekiq server
-    let mut p = Processor::new(redis.clone(), logger.clone(), vec!["default".to_string()]);
+    let mut p = Processor::new(redis.clone(), vec!["default".to_string()]);
 
     // Add known workers
     p.register(HelloWorker);

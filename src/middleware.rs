@@ -1,10 +1,9 @@
+use super::Result;
 use crate::{Counter, Job, RedisPool, UnitOfWork, WorkerRef};
 use async_trait::async_trait;
-use slog::error;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
-pub type ServerResult = Result<(), Box<dyn std::error::Error>>;
+use tracing::error;
 
 #[async_trait]
 pub trait ServerMiddleware {
@@ -14,7 +13,7 @@ pub trait ServerMiddleware {
         job: &Job,
         worker: Arc<WorkerRef>,
         redis: RedisPool,
-    ) -> ServerResult;
+    ) -> Result<()>;
 }
 
 /// A pseudo iterator used to know which middleware should be called next.
@@ -27,7 +26,7 @@ pub struct ChainIter {
 
 impl ChainIter {
     #[inline]
-    pub async fn next(&self, job: &Job, worker: Arc<WorkerRef>, redis: RedisPool) -> ServerResult {
+    pub async fn next(&self, job: &Job, worker: Arc<WorkerRef>, redis: RedisPool) -> Result<()> {
         let stack = self.stack.read().await;
 
         if let Some(middleware) = stack.get(self.index) {
@@ -63,10 +62,10 @@ impl Chain {
         }
     }
 
-    pub(crate) fn new_with_stats(logger: slog::Logger, counter: Counter) -> Self {
+    pub(crate) fn new_with_stats(counter: Counter) -> Self {
         Self {
             stack: Arc::new(RwLock::new(vec![
-                Box::new(RetryMiddleware::new(logger)),
+                Box::new(RetryMiddleware::new()),
                 Box::new(StatsMiddleware::new(counter)),
                 Box::new(HandlerMiddleware),
             ])),
@@ -95,7 +94,7 @@ impl Chain {
         job: &Job,
         worker: Arc<WorkerRef>,
         redis: RedisPool,
-    ) -> ServerResult {
+    ) -> Result<()> {
         // The middleware must call bottom of the stack to the top.
         // Each middleware should receive a lambda to the next middleware
         // up the stack. Each middleware can short-circuit the stack by
@@ -123,7 +122,7 @@ impl ServerMiddleware for StatsMiddleware {
         job: &Job,
         worker: Arc<WorkerRef>,
         redis: RedisPool,
-    ) -> ServerResult {
+    ) -> Result<()> {
         self.busy_count.incrby(1);
         let res = chain.next(job, worker, redis).await;
         self.busy_count.decrby(1);
@@ -142,18 +141,16 @@ impl ServerMiddleware for HandlerMiddleware {
         job: &Job,
         worker: Arc<WorkerRef>,
         _redis: RedisPool,
-    ) -> ServerResult {
+    ) -> Result<()> {
         worker.call(job.args.clone()).await
     }
 }
 
-struct RetryMiddleware {
-    logger: slog::Logger,
-}
+struct RetryMiddleware {}
 
 impl RetryMiddleware {
-    fn new(logger: slog::Logger) -> Self {
-        Self { logger }
+    fn new() -> Self {
+        Self {}
     }
 }
 
@@ -166,7 +163,7 @@ impl ServerMiddleware for RetryMiddleware {
         job: &Job,
         worker: Arc<WorkerRef>,
         redis: RedisPool,
-    ) -> ServerResult {
+    ) -> Result<()> {
         let max_retries = worker.max_retries();
 
         let err = {
@@ -190,14 +187,13 @@ impl ServerMiddleware for RetryMiddleware {
 
         // Attempt the retry.
         if retry_count < max_retries {
-            error!(self.logger,
-                "Scheduling job for retry in the future";
-                "status" => "fail",
-                "class" => &job.class,
-                "jid" => &job.jid,
-                "queue" => &job.queue,
-                "err" => &job.error_message,
-            );
+            error!({
+                "status" = "fail",
+                "class" = &job.class,
+                "jid" = &job.jid,
+                "queue" = &job.queue,
+                "err" = &job.error_message
+            }, "Scheduling job for retry in the future");
 
             UnitOfWork::from_job(job).reenqueue(&redis).await?;
         }
@@ -242,7 +238,7 @@ mod test {
 
     #[async_trait]
     impl Worker<()> for TestWorker {
-        async fn perform(&self, _args: ()) -> Result<(), Box<dyn std::error::Error>> {
+        async fn perform(&self, _args: ()) -> Result<()> {
             *self.touched.lock().await = true;
             Ok(())
         }
