@@ -33,7 +33,7 @@ impl PaymentReportWorker {
     async fn send_report(&self, user_guid: String) -> Result<()> {
         // TODO: Some actual work goes here...
         info!({
-            "user_guid" = user_guid, 
+            "user_guid" = user_guid,
             "class_name" = Self::class_name()
         }, "Sending payment report to user");
 
@@ -69,13 +69,7 @@ impl Worker<PaymentReportArgs> for PaymentReportWorker {
     }
 }
 
-struct FilterExpiredUsersMiddleware {}
-
-impl FilterExpiredUsersMiddleware {
-    fn new() -> Self {
-        Self {}
-    }
-}
+struct FilterExpiredUsersMiddleware;
 
 #[derive(Deserialize)]
 struct FiltereExpiredUsersArgs {
@@ -106,7 +100,7 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
                 error!({
                     "class" = &job.class,
                     "jid" = &job.jid,
-                    "user_guid" = filter.user_guid 
+                    "user_guid" = filter.user_guid
                 }, "Detected an expired user, skipping this job");
                 return Ok(());
             }
@@ -212,7 +206,7 @@ async fn main() -> Result<()> {
     p.register(PaymentReportWorker::new(redis.clone()));
 
     // Custom Middlewares
-    p.using(FilterExpiredUsersMiddleware::new()).await;
+    p.using(FilterExpiredUsersMiddleware).await;
 
     // Reset cron jobs
     periodic::destroy_all(redis.clone()).await?;
