@@ -21,6 +21,7 @@ mod stats;
 pub use crate::redis::{
     with_custom_namespace, RedisConnection, RedisConnectionManager, RedisError, RedisPool,
 };
+pub use ::redis as redis_rs;
 pub use middleware::{ChainIter, ServerMiddleware};
 pub use processor::{Processor, WorkFetcher};
 pub use scheduled::Scheduled;
