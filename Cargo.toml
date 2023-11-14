@@ -1,6 +1,6 @@
 [package]
 name = "rusty-sidekiq"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 description = "A rust sidekiq server and client using tokio"
 authors = ["Garrett Thornburg <garrett.thornburg@hey.com>"]
