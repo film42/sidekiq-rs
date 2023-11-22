@@ -10,6 +10,11 @@ keywords = ["sidekiq", "worker", "tokio", "ruby"]
 license = "MIT"
 readme = "README.md"
 
+[features]
+default = ["rss-stats"]
+
+rss-stats = ["dep:simple-process-stats"]
+
 [lib]
 name = "sidekiq"
 
@@ -29,7 +34,7 @@ rand = "0.8"
 hex = "0.4"
 heck = "0.4"
 cron_clock = "0.8.0"
-simple-process-stats = "1.0.0"
+simple-process-stats = { version = "1.0.0", optional = true }
 sha2 = "0.10.6"
 
 tracing = "0.1.40"
