@@ -13,6 +13,8 @@ readme = "README.md"
 [features]
 default = ["rss-stats"]
 
+# There is currently a dependency bug for mac in the `darwin-libproc` crate making it so
+# cargo cannot resolve deps. Once resolved we may choose to remove this feature flag.
 rss-stats = ["dep:simple-process-stats"]
 
 [lib]
