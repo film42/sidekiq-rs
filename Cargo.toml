@@ -34,10 +34,10 @@ num_cpus = "1.13"
 chrono = "0.4"
 rand = "0.8"
 hex = "0.4"
-heck = "0.4"
 cron_clock = "0.8.0"
 simple-process-stats = { version = "1.0.0", optional = true }
 sha2 = "0.10.6"
+convert_case = "0.6.0"
 
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter", "json"] }
