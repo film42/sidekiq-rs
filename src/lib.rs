@@ -294,10 +294,11 @@ pub trait Worker<Args>: Send + Sync {
     where
         Self: Sized,
     {
-        use heck::ToUpperCamelCase;
+        use convert_case::{Case, Casing};
+
         let type_name = std::any::type_name::<Self>();
         let name = type_name.split("::").last().unwrap_or(type_name);
-        name.to_upper_camel_case()
+        name.to_case(Case::UpperCamel)
     }
 
     async fn perform_async(redis: &RedisPool, args: Args) -> Result<()>
@@ -532,6 +533,15 @@ mod test {
             pub mod workers {
                 use super::super::super::super::*;
 
+                pub struct X1Y2MyJob;
+
+                #[async_trait]
+                impl Worker<()> for X1Y2MyJob {
+                    async fn perform(&self, _args: ()) -> Result<()> {
+                        Ok(())
+                    }
+                }
+
                 pub struct TestModuleWorker;
 
                 #[async_trait]
@@ -565,6 +575,14 @@ mod test {
         assert_eq!(
             my::cool::workers::TestModuleWorker::class_name(),
             "TestModuleWorker".to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn does_not_reformat_valid_ruby_class_names() {
+        assert_eq!(
+            my::cool::workers::X1Y2MyJob::class_name(),
+            "X1Y2MyJob".to_string()
         );
     }
 
