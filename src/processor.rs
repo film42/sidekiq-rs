@@ -5,7 +5,9 @@ use crate::{
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tracing::{error, info};
+use tokio::select;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info};
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum WorkFetcher {
@@ -22,6 +24,7 @@ pub struct Processor {
     workers: BTreeMap<String, Arc<WorkerRef>>,
     chain: Chain,
     busy_jobs: Counter,
+    cancellation_token: CancellationToken,
 }
 
 impl Processor {
@@ -41,6 +44,7 @@ impl Processor {
                 .map(|queue| format!("queue:{queue}"))
                 .collect(),
             human_readable_queues: queues,
+            cancellation_token: CancellationToken::new(),
         }
     }
 
@@ -62,6 +66,10 @@ impl Processor {
 
     pub async fn process_one(&mut self) -> Result<()> {
         loop {
+            if self.cancellation_token.is_cancelled() {
+                return Ok(());
+            }
+
             if let WorkFetcher::NoWorkFound = self.process_one_tick_once().await? {
                 continue;
             }
@@ -125,6 +133,10 @@ impl Processor {
             .insert(W::class_name(), Arc::new(WorkerRef::wrap(Arc::new(worker))));
     }
 
+    pub fn get_cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
+    }
+
     pub(crate) async fn register_periodic(&mut self, periodic_job: PeriodicJob) -> Result<()> {
         self.periodic_jobs.push(periodic_job.clone());
 
@@ -146,27 +158,37 @@ impl Processor {
     /// memory safety because you can clone processor pretty easily.
     pub async fn run(self) {
         let cpu_count = num_cpus::get();
+        let mut handles = vec![];
 
         // Start worker routines.
-        for _ in 0..cpu_count {
-            tokio::spawn({
+        for i in 0..cpu_count {
+            handles.push(tokio::spawn({
                 let mut processor = self.clone();
+                let cancellation_token = self.cancellation_token.clone();
 
                 async move {
                     loop {
                         if let Err(err) = processor.process_one().await {
                             error!("Error leaked out the bottom: {:?}", err);
                         }
+
+                        if cancellation_token.is_cancelled() {
+                            break;
+                        }
                     }
+
+                    debug!("Broke out of loop for worker {}", i);
                 }
-            });
+            }));
         }
 
         // Start sidekiq-web metrics publisher.
-        tokio::spawn({
+        // TODO: store as other_handles
+        handles.push(tokio::spawn({
             let redis = self.redis.clone();
             let queues = self.human_readable_queues.clone();
             let busy_jobs = self.busy_jobs.clone();
+            let cancellation_token = self.cancellation_token.clone();
             async move {
                 let hostname = if let Some(host) = gethostname::gethostname().to_str() {
                     host.to_string()
@@ -178,52 +200,75 @@ impl Processor {
 
                 loop {
                     // TODO: Use process count to meet a 5 second avg.
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                        _ = cancellation_token.cancelled() => {
+                            break;
+                        }
+                    }
 
                     if let Err(err) = stats_publisher.publish_stats(redis.clone()).await {
                         error!("Error publishing processor stats: {:?}", err);
                     }
                 }
+
+                debug!("Broke out of loop web metrics");
             }
-        });
+        }));
 
         // Start retry and scheduled routines.
-        tokio::spawn({
+        handles.push(tokio::spawn({
             let redis = self.redis.clone();
+            let cancellation_token = self.cancellation_token.clone();
             async move {
                 let sched = Scheduled::new(redis);
                 let sorted_sets = vec!["retry".to_string(), "schedule".to_string()];
 
                 loop {
                     // TODO: Use process count to meet a 5 second avg.
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                        _ = cancellation_token.cancelled() => {
+                            break;
+                        }
+                    }
 
                     if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await {
                         error!("Error in scheduled poller routine: {:?}", err);
                     }
                 }
+
+                debug!("Broke out of loop for retry and scheduled");
             }
-        });
+        }));
 
         // Watch for periodic jobs and enqueue jobs.
-        tokio::spawn({
+        handles.push(tokio::spawn({
             let redis = self.redis.clone();
+            let cancellation_token = self.cancellation_token.clone();
             async move {
                 let sched = Scheduled::new(redis);
 
                 loop {
                     // TODO: Use process count to meet a 30 second avg.
-                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+                        _ = cancellation_token.cancelled() => {
+                            break;
+                        }
+                    }
 
                     if let Err(err) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
                         error!("Error in periodic job poller routine: {:?}", err);
                     }
                 }
-            }
-        });
 
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                debug!("Broke out of loop for periodic");
+            }
+        }));
+
+        for handle in handles {
+            handle.await.unwrap();
         }
     }
 
