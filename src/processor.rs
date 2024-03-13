@@ -183,7 +183,6 @@ impl Processor {
         }
 
         // Start sidekiq-web metrics publisher.
-        // TODO: store as other_handles
         handles.push(tokio::spawn({
             let redis = self.redis.clone();
             let queues = self.human_readable_queues.clone();
