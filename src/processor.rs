@@ -258,7 +258,7 @@ impl Processor {
                     }
 
                     if let Err(err) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
-                        error!("Error in periodic job poller routine: {:?}", err);
+                        error!("Error in periodic job poller routine: {}", err);
                     }
                 }
 
@@ -267,7 +267,9 @@ impl Processor {
         }));
 
         for handle in handles {
-            handle.await.unwrap();
+            if let Err(err) = handle.await {
+                error!("Processor had a spawned task return an error: {}", &err);
+            }
         }
     }
 
