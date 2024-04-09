@@ -180,7 +180,15 @@ impl ServerMiddleware for RetryMiddleware {
         job.retry_count = Some(retry_count);
 
         // Attempt the retry.
-        if retry_count < max_retries {
+        if retry_count > max_retries {
+            error!({
+                "status" = "fail",
+                "class" = &job.class,
+                "jid" = &job.jid,
+                "queue" = &job.queue,
+                "err" = &job.error_message
+            }, "Max retries exceeded, will not reschedule job");
+        } else {
             error!({
                 "status" = "fail",
                 "class" = &job.class,
