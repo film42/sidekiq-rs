@@ -464,7 +464,7 @@ impl UnitOfWork {
                 &job.queue, &job.class, &args_hash
             );
             if let redis::RedisValue::Nil = redis
-                .set_nx_ex(redis_key, "".into(), duration.as_secs() as usize)
+                .set_nx_ex(redis_key, "", duration.as_secs() as usize)
                 .await?
             {
                 // This job has already been enqueued. Do not submit it to redis.
