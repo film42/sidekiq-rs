@@ -847,7 +847,7 @@ checksum = "5583e89e108996506031660fe09baa5011b9dd0341b89029313006d1fb508d70"
 
 [[package]]
 name = "rusty-sidekiq"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "async-trait",
  "bb8",
