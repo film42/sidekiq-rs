@@ -154,20 +154,29 @@ impl RedisConnection {
             .await
     }
 
-    pub async fn lpush(&mut self, key: String, value: String) -> Result<(), RedisError> {
+    pub async fn lpush<V>(&mut self, key: String, value: V) -> Result<(), RedisError>
+    where
+        V: ToRedisArgs + Send + Sync,
+    {
         self.connection.lpush(self.namespaced_key(key), value).await
     }
 
-    pub async fn sadd(&mut self, key: String, value: String) -> Result<(), RedisError> {
+    pub async fn sadd<V>(&mut self, key: String, value: V) -> Result<(), RedisError>
+    where
+        V: ToRedisArgs + Send + Sync,
+    {
         self.connection.sadd(self.namespaced_key(key), value).await
     }
 
-    pub async fn set_nx_ex(
+    pub async fn set_nx_ex<V>(
         &mut self,
         key: String,
-        value: String,
+        value: V,
         ttl_in_seconds: usize,
-    ) -> Result<RedisValue, RedisError> {
+    ) -> Result<RedisValue, RedisError>
+    where
+        V: ToRedisArgs + Send + Sync,
+    {
         redis::cmd("SET")
             .arg(self.namespaced_key(key))
             .arg(value)
@@ -228,11 +237,10 @@ impl RedisConnection {
             .await
     }
 
-    pub async fn zrem<V: ToRedisArgs + Send + Sync>(
-        &mut self,
-        key: String,
-        value: V,
-    ) -> Result<bool, RedisError> {
+    pub async fn zrem<V>(&mut self, key: String, value: V) -> Result<bool, RedisError>
+    where
+        V: ToRedisArgs + Send + Sync,
+    {
         self.connection.zrem(self.namespaced_key(key), value).await
     }
 }
