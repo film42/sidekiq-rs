@@ -116,15 +116,15 @@ async fn main() -> Result<()> {
 
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
-    let mut redis = Pool::builder().build(manager).await?;
+    let redis = Pool::builder().build(manager).await?;
 
     tokio::spawn({
-        let mut redis = redis.clone();
+        let redis = redis.clone();
 
         async move {
             loop {
                 PaymentReportWorker::perform_async(
-                    &mut redis,
+                    &redis,
                     PaymentReportArgs {
                         user_guid: "USR-123".into(),
                     },
@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
 
     // Enqueue a job with the worker! There are many ways to do this.
     PaymentReportWorker::perform_async(
-        &mut redis,
+        &redis,
         PaymentReportArgs {
             user_guid: "USR-123".into(),
         },
@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
     .await?;
 
     PaymentReportWorker::perform_in(
-        &mut redis,
+        &redis,
         std::time::Duration::from_secs(10),
         PaymentReportArgs {
             user_guid: "USR-123".into(),
@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
     PaymentReportWorker::opts()
         .queue("brolo")
         .perform_async(
-            &mut redis,
+            &redis,
             PaymentReportArgs {
                 user_guid: "USR-123-EXPIRED".into(),
             },
@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
         .await?;
 
     sidekiq::perform_async(
-        &mut redis,
+        &redis,
         "PaymentReportWorker".into(),
         "yolo".into(),
         PaymentReportArgs {
@@ -177,7 +177,7 @@ async fn main() -> Result<()> {
 
     // Enqueue a job
     sidekiq::perform_async(
-        &mut redis,
+        &redis,
         "PaymentReportWorker".into(),
         "yolo".into(),
         PaymentReportArgs {
@@ -190,7 +190,7 @@ async fn main() -> Result<()> {
     sidekiq::opts()
         .queue("yolo".to_string())
         .perform_async(
-            &mut redis,
+            &redis,
             "PaymentReportWorker".into(),
             PaymentReportArgs {
                 user_guid: "USR-123".to_string(),
