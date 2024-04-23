@@ -25,6 +25,40 @@ pub struct Processor {
     chain: Chain,
     busy_jobs: Counter,
     cancellation_token: CancellationToken,
+    config: ProcessorConfig,
+}
+
+#[derive(Clone)]
+#[allow(clippy::manual_non_exhaustive)]
+pub struct ProcessorConfig {
+    /// The number of Sidekiq workers that can run at the same time. Adjust as needed based on
+    /// your workload and resource (cpu/memory/etc) usage.
+    ///
+    /// If your workload is largely CPU-bound (computationally expensive), this should probably
+    /// match your CPU count. This is the default.
+    ///
+    /// If your workload is largely IO-bound (e.g. reading from a DB, making web requests and
+    /// waiting for responses, etc), this can probably be quite a bit higher than your CPU count.
+    pub num_workers: usize,
+    // Disallow consumers from directly creating a ProcessorConfig object.
+    _private: (),
+}
+
+impl ProcessorConfig {
+    #[must_use]
+    pub fn num_workers(mut self, num_workers: usize) -> Self {
+        self.num_workers = num_workers;
+        self
+    }
+}
+
+impl Default for ProcessorConfig {
+    fn default() -> Self {
+        Self {
+            num_workers: num_cpus::get(),
+            _private: Default::default(),
+        }
+    }
 }
 
 impl Processor {
@@ -45,7 +79,13 @@ impl Processor {
                 .collect(),
             human_readable_queues: queues,
             cancellation_token: CancellationToken::new(),
+            config: Default::default(),
         }
+    }
+
+    pub fn with_config(mut self, config: ProcessorConfig) -> Self {
+        self.config = config;
+        self
     }
 
     async fn fetch(&mut self) -> Result<Option<UnitOfWork>> {
@@ -157,11 +197,10 @@ impl Processor {
     /// Takes self to consume the processor. This is for life-cycle management, not
     /// memory safety because you can clone processor pretty easily.
     pub async fn run(self) {
-        let cpu_count = num_cpus::get();
         let mut handles = vec![];
 
         // Start worker routines.
-        for i in 0..cpu_count {
+        for i in 0..self.config.num_workers {
             handles.push(tokio::spawn({
                 let mut processor = self.clone();
                 let cancellation_token = self.cancellation_token.clone();

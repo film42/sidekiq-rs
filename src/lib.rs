@@ -23,7 +23,7 @@ pub use crate::redis::{
 };
 pub use ::redis as redis_rs;
 pub use middleware::{ChainIter, ServerMiddleware};
-pub use processor::{Processor, WorkFetcher};
+pub use processor::{Processor, ProcessorConfig, WorkFetcher};
 pub use scheduled::Scheduled;
 pub use stats::{Counter, StatsPublisher};
 
