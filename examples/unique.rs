@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
 
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
-    let mut redis = Pool::builder().build(manager).await?;
+    let redis = Pool::builder().build(manager).await?;
 
     // Sidekiq server
     let mut p = Processor::new(redis.clone(), vec!["customers".to_string()]);
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     // one of these should be created within a 30 second period.
     for _ in 1..10 {
         CustomerNotificationWorker::perform_async(
-            &mut redis,
+            &redis,
             CustomerNotification {
                 customer_guid: "CST-123".to_string(),
             },

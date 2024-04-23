@@ -54,13 +54,13 @@ mod test {
             did_process: Arc::new(Mutex::new(false)),
         };
         let queue = "random123".to_string();
-        let (mut p, mut redis) = new_base_processor(queue.clone()).await;
+        let (mut p, redis) = new_base_processor(queue.clone()).await;
 
         p.register(worker.clone());
 
         TestWorker::opts()
             .queue(queue)
-            .perform_async(&mut redis, ())
+            .perform_async(&redis, ())
             .await
             .unwrap();
 

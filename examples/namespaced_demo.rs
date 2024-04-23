@@ -27,11 +27,11 @@ async fn main() -> Result<()> {
         .await?;
 
     tokio::spawn({
-        let mut redis = redis.clone();
+        let redis = redis.clone();
 
         async move {
             loop {
-                HelloWorker::perform_async(&mut redis, ()).await.unwrap();
+                HelloWorker::perform_async(&redis, ()).await.unwrap();
 
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }

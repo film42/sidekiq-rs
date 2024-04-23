@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
 
     // Redis
     let manager = RedisConnectionManager::new("redis://127.0.0.1/")?;
-    let mut redis = Pool::builder().build(manager).await?;
+    let redis = Pool::builder().build(manager).await?;
 
     let mut n = 0;
     let mut last = 0;
@@ -103,7 +103,7 @@ async fn main() -> Result<()> {
 
     loop {
         PaymentReportWorker::perform_async(
-            &mut redis,
+            &redis,
             PaymentReportArgs {
                 user_guid: "USR-123".into(),
             },
