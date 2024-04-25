@@ -122,6 +122,11 @@ impl Processor {
         let work = self.fetch().await?;
 
         if work.is_none() {
+            // If there is no job to handle, we need to add a `yield_now` in order to allow tokio's
+            // scheduler to wake up another task that may be waiting to acquire a connection from
+            // the Redis connection pool. See the following issue for more details:
+            // https://github.com/film42/sidekiq-rs/issues/43
+            tokio::task::yield_now().await;
             return Ok(WorkFetcher::NoWorkFound);
         }
         let mut work = work.expect("polled and found some work");
