@@ -243,6 +243,41 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
 }
 ```
 
+## Best practices
+
+### Separate enqueue vs fetch connection pools
+
+Though not required, it's recommended to use separate Redis connection pools for pushing jobs to Redis vs fetching
+jobs. This has the following benefits:
+
+- The pools can have different sizes, each optimized depending on the resource usage/constraints of your application.
+- If the `sidekiq::Processor` is configured to have more worker tasks than the max size of the connection pool, then
+  there may be a delay in acquiring a connection from the queue. This is a problem for enqueuing jobs, as it's normally
+  desired that enqueuing be as fast as possible to avoid delaying the critical path of another operation (e.g., an API
+  request). With a separate pool for enqueuing, enqueuing jobs is not impacted by the `sidekiq::Processor`'s usage of
+  the pool.
+
+```rust
+#[tokio::main]
+async fn main() -> Result<()> {
+    let manager = sidekiq::RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
+    let redis_enqueue = bb8::Pool::builder().build(manager).await.unwrap();
+    let redis_fetch = bb8::Pool::builder().build(manager).await.unwrap();
+
+    let p = Processor::new(
+        redis_fetch,
+        vec!["default".to_string()],
+    );
+    p.run().await;
+
+    // ...
+
+    ExampleWorker::perform_async(&redis_enqueue, ExampleArgs { foo: "bar".to_string() }).await?;
+
+    Ok(())
+}
+```
+
 ## Customization Details
 
 ### Namespacing the workers
@@ -336,6 +371,28 @@ impl Worker<()> for MyWorker {
 
 And now when ruby enqueues a `Workers::MyWorker` job, it will be picked up by rust-sidekiq.
 
+### Customizing the number of worker tasks spawned by the `sidekiq::Processor`
+
+If an app's workload is largely IO bound (querying a DB, making web requests and waiting for responses, etc), its
+workers will spend a large percentage of time idle `await`ing for futures to complete. This in turn means the will CPU
+sit idle a large percentage of the time (if nothing else is running on the host), resulting in under-utilizing available
+CPU resources.
+
+By default, the number of worker tasks spawned by the `sidekiq::Processor` is the host's CPU count, but this can
+be configured depending on the needs of the app, allowing to use CPU resources more efficiently.
+
+```rust
+#[tokio::main]
+async fn main() -> Result<()> {
+    // ...
+    let num_workers = usize::from_str(&env::var("NUM_WORKERS").unwrap()).unwrap();
+    let config: ProcessorConfig = Default::default();
+    let config = config.num_workers(num_workers);
+    let processor = Processor::new(redis_fetch, queues.clone())
+        .with_config(config);
+    // ...
+}
+```
 
 ## License
 
