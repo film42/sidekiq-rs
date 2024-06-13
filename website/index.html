@@ -1,0 +1,152 @@
+<html>
+  <head>
+    <title>Sidekiq.rs - A ansync rust sidekiq client and server</title>
+    <style>
+      :root {
+        --main-bg-color: rgba(252, 244, 242, 0.5);
+        --title-color: rgb(29, 45, 53);
+        --text-color: rgb(29, 45, 53);
+        --font-family: "Arial", sans-serif;
+        --code-background: rgb(255, 255, 255);
+        --rgb-blue: rgb(30, 100, 230);
+        --rgb-green: rgb(38, 136, 41);
+        --rgb-red: rgb(245, 25, 45);
+        --rgb-red-dark: rgb(177 0 62);
+        --rgb-red-light: rgb(255, 55, 75);
+        --rgb-yellow: rgb(255, 226, 0);
+        --rgb-yellow-light: rgb(255, 255, 225);
+        --rgb-warm-1: rgb(255, 247, 239);
+        --rgb-grey: rgb(142, 150, 154);
+        --rgb-grey-light: rgb(233, 234, 235);
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: var(--main-bg-color);
+        font-family: var(--font-family);
+        font-size: clamp(1.3rem, 1.9vw, 1.7rem);
+        color: var(--text-color);
+      }
+
+      #frame {
+        margin: 10px auto;
+        min-width: 550px;
+        max-width: 80%;
+        padding: 0 10px;
+        z-index: 100;
+        position: relative;
+      }
+
+      h1 {
+        font-size: 220%;
+        margin: 20px 0;
+        color: var(--rgb-red-dark);
+      }
+
+      header {
+        border-bottom: 3px dotted var(--rgb-warm-1);
+      }
+
+      pre, code {
+        font-size: 90%;
+        background-color: var(--code-background);
+        font-family: monospace;
+        border-radius: 0.25em;
+      }
+
+      pre {
+        overflow: scroll;
+        padding: 12px;
+        border-radius: 0.5em;
+      }
+
+      .hljs {
+        background: var(--code-background) !important;
+        color: var(--text-color);
+      }
+
+      code {
+        border-radius: 0.25em;
+        padding: 3px;
+
+        .hljs-meta {
+          color: var(--border-color);
+
+        }
+
+        .hljs-comment {
+          color: var(--rgb-grey);
+        }
+
+        .hljs-title.class_, .hljs-title.function_, .hljs-type {
+          color: var(--rgb-red-dark);
+        }
+      }
+
+      .splashy-background {
+          background: var(--rgb-red-dark);
+          width: 100%;
+          height: 80vh;
+          max-height: 500px;
+          border-bottom-left-radius: 100%;
+          border-bottom-right-radius: 100%;
+          position: absolute;
+          top: 0;
+          left: 0;
+          z-index: -1;
+          opacity: 0.175;
+      }
+    </style>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
+    <script>
+      hljs.configure({cssSelector: ".demo" });
+      hljs.highlightAll();
+    </script>
+  </head>
+
+  <body>
+    <div class="splashy-background"></div>
+
+    <div id="frame">
+      <header>
+        <h1>Sidekiq-rs</h1>
+      </header>
+
+      <div class="content">
+        <p>Sidekiq-rs (aka <code>rusty-sidekiq</code>) is a strongly typed client and server written in async rust. It can interoperate with a ruby app using sidekiq. It's great!</p>
+
+        <pre><code class="demo language-rust">#[derive(Deserialize, Debug, Serialize)]
+struct PaymentReportArgs {
+    user_guid: String,
+}
+
+#[async_trait]
+impl Worker<PaymentReportArgs> for PaymentReportWorker {
+    // Default worker options
+    fn opts() -> sidekiq::WorkerOpts<Self> {
+        sidekiq::WorkerOpts::new().queue("reports")
+    }
+
+    // Worker implementation
+    async fn perform(&self, args: PaymentReportArgs) -> Result<()> {
+        self.send_report(args.user_guid).await
+    }
+}</code></pre>
+
+        <p>Start using it today!</p>
+
+        <pre><code>cargo add rusty-sidekiq</code></pre>
+
+      </div>
+
+      <footer>
+        <p>This is just a preview of sidekiq in rust. Head over to <a href="https://github.com/film42/sidekiq-rs/">Github</a> for more information.</p>
+        <p>License MIT</p>
+      </footer>
+    </div>
+  </body>
+</html>
