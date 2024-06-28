@@ -201,6 +201,7 @@ impl PeriodicJob {
             retried_at: None,
 
             // Meta data not used in periodic jobs right now...
+            expected_to_enqueue_at: None,
             unique_for: None,
         }
     }

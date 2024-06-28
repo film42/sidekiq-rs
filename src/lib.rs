@@ -116,6 +116,7 @@ impl EnqueueOpts {
             retried_at: None,
 
             // Meta for enqueueing
+            expected_to_enqueue_at: None,
             unique_for: self.unique_for,
         })
     }
@@ -420,6 +421,10 @@ pub struct Job {
     pub retry_count: Option<usize>,
     pub retried_at: Option<f64>,
 
+    // Crate specific items
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_to_enqueue_at: Option<f64>,
+
     #[serde(skip)]
     pub unique_for: Option<std::time::Duration>,
 }
@@ -509,6 +514,8 @@ impl UnitOfWork {
         duration: std::time::Duration,
     ) -> Result<()> {
         let enqueue_at = chrono::Utc::now() + chrono::Duration::from_std(duration)?;
+
+        self.job.expected_to_enqueue_at = Some(enqueue_at.timestamp() as f64);
 
         redis
             .get()
