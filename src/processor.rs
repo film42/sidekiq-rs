@@ -41,6 +41,9 @@ pub struct ProcessorConfig {
     /// If your workload is largely IO-bound (e.g. reading from a DB, making web requests and
     /// waiting for responses, etc), this can probably be quite a bit higher than your CPU count.
     pub num_workers: usize,
+    pub enqueue_periodic_jobs: bool,
+    pub enqueue_retry_jobs: bool,
+    pub enqueue_scheduled_jobs: bool,
     // Disallow consumers from directly creating a ProcessorConfig object.
     _private: (),
 }
@@ -51,12 +54,33 @@ impl ProcessorConfig {
         self.num_workers = num_workers;
         self
     }
+
+    #[must_use]
+    pub fn enqueue_periodic_jobs(mut self, enqueue_periodic_jobs: bool) -> Self {
+        self.enqueue_periodic_jobs = enqueue_periodic_jobs;
+        self
+    }
+
+    #[must_use]
+    pub fn enqueue_retry_jobs(mut self, enqueue_retry_jobs: bool) -> Self {
+        self.enqueue_retry_jobs = enqueue_retry_jobs;
+        self
+    }
+
+    #[must_use]
+    pub fn enqueue_scheduled_jobs(mut self, enqueue_scheduled_jobs: bool) -> Self {
+        self.enqueue_scheduled_jobs = enqueue_scheduled_jobs;
+        self
+    }
 }
 
 impl Default for ProcessorConfig {
     fn default() -> Self {
         Self {
             num_workers: num_cpus::get(),
+            enqueue_periodic_jobs: true,
+            enqueue_retry_jobs: true,
+            enqueue_scheduled_jobs: true,
             _private: Default::default(),
         }
     }
@@ -260,56 +284,66 @@ impl Processor {
             }
         });
 
-        // Start retry and scheduled routines.
-        join_set.spawn({
-            let redis = self.redis.clone();
-            let cancellation_token = self.cancellation_token.clone();
-            async move {
-                let sched = Scheduled::new(redis);
-                let sorted_sets = vec!["retry".to_string(), "schedule".to_string()];
+        if self.config.enqueue_retry_jobs || self.config.enqueue_scheduled_jobs {
+            // Start retry and scheduled routines.
+            join_set.spawn({
+                let redis = self.redis.clone();
+                let cancellation_token = self.cancellation_token.clone();
+                async move {
+                    let sched = Scheduled::new(redis);
+                    let mut sorted_sets = vec![];
+                    if self.config.enqueue_retry_jobs {
+                        sorted_sets.push("retry".to_string());
+                    }
+                    if self.config.enqueue_scheduled_jobs {
+                        sorted_sets.push("schedule".to_string());
+                    }
 
-                loop {
-                    // TODO: Use process count to meet a 5 second avg.
-                    select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                        _ = cancellation_token.cancelled() => {
-                            break;
+                    loop {
+                        // TODO: Use process count to meet a 5 second avg.
+                        select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                            _ = cancellation_token.cancelled() => {
+                                break;
+                            }
+                        }
+
+                        if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await {
+                            error!("Error in scheduled poller routine: {:?}", err);
                         }
                     }
 
-                    if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await {
-                        error!("Error in scheduled poller routine: {:?}", err);
-                    }
+                    debug!("Broke out of loop for retry and scheduled");
                 }
+            });
+        }
 
-                debug!("Broke out of loop for retry and scheduled");
-            }
-        });
+        if self.config.enqueue_periodic_jobs {
+            // Watch for periodic jobs and enqueue jobs.
+            join_set.spawn({
+                let redis = self.redis.clone();
+                let cancellation_token = self.cancellation_token.clone();
+                async move {
+                    let sched = Scheduled::new(redis);
 
-        // Watch for periodic jobs and enqueue jobs.
-        join_set.spawn({
-            let redis = self.redis.clone();
-            let cancellation_token = self.cancellation_token.clone();
-            async move {
-                let sched = Scheduled::new(redis);
+                    loop {
+                        // TODO: Use process count to meet a 30 second avg.
+                        select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+                            _ = cancellation_token.cancelled() => {
+                                break;
+                            }
+                        }
 
-                loop {
-                    // TODO: Use process count to meet a 30 second avg.
-                    select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
-                        _ = cancellation_token.cancelled() => {
-                            break;
+                        if let Err(err) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
+                            error!("Error in periodic job poller routine: {}", err);
                         }
                     }
 
-                    if let Err(err) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
-                        error!("Error in periodic job poller routine: {}", err);
-                    }
+                    debug!("Broke out of loop for periodic");
                 }
-
-                debug!("Broke out of loop for periodic");
-            }
-        });
+            });
+        }
 
         while let Some(result) = join_set.join_next().await {
             if let Err(err) = result {
