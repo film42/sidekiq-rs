@@ -98,7 +98,7 @@ impl StatsPublisher {
     pub async fn publish_stats(&self, redis: RedisPool) -> Result<(), Box<dyn std::error::Error>> {
         let stats = self.create_process_stats().await?;
         let mut conn = redis.get().await?;
-        conn.cmd_with_key("HSET", self.identity.clone())
+        let _ : () = conn.cmd_with_key("HSET", self.identity.clone())
             .arg("rss")
             .arg(stats.rss)
             .arg("rtt_us")

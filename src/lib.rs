@@ -57,14 +57,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub fn opts() -> EnqueueOpts {
     EnqueueOpts {
         queue: "default".into(),
-        retry: true,
+        retry: JsonValue::Bool(true),
         unique_for: None,
     }
 }
 
 pub struct EnqueueOpts {
     queue: String,
-    retry: bool,
+    retry: JsonValue,
     unique_for: Option<std::time::Duration>,
 }
 
@@ -78,7 +78,7 @@ impl EnqueueOpts {
     }
 
     #[must_use]
-    pub fn retry(self, retry: bool) -> Self {
+    pub fn retry(self, retry: JsonValue) -> Self {
         Self { retry, ..self }
     }
 
@@ -106,7 +106,7 @@ impl EnqueueOpts {
             jid: new_jid(),
             created_at: chrono::Utc::now().timestamp() as f64,
             enqueued_at: None,
-            retry: self.retry,
+            retry: self.retry.clone(),
             args,
 
             // Make default eventually...
@@ -178,7 +178,7 @@ fn new_jid() -> String {
 
 pub struct WorkerOpts<Args, W: Worker<Args> + ?Sized> {
     queue: String,
-    retry: bool,
+    retry: JsonValue,
     args: PhantomData<Args>,
     worker: PhantomData<W>,
     unique_for: Option<std::time::Duration>,
@@ -192,7 +192,7 @@ where
     pub fn new() -> Self {
         Self {
             queue: "default".into(),
-            retry: true,
+            retry: JsonValue::Bool(true),
             args: PhantomData,
             worker: PhantomData,
             unique_for: None,
@@ -200,7 +200,7 @@ where
     }
 
     #[must_use]
-    pub fn retry(self, retry: bool) -> Self {
+    pub fn retry(self, retry: JsonValue) -> Self {
         Self { retry, ..self }
     }
 
@@ -250,7 +250,7 @@ where
 impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
     fn from(opts: &WorkerOpts<Args, W>) -> Self {
         Self {
-            retry: opts.retry,
+            retry: opts.retry.clone(),
             queue: opts.queue.clone(),
             unique_for: opts.unique_for,
         }
@@ -410,7 +410,7 @@ impl WorkerRef {
 pub struct Job {
     pub queue: String,
     pub args: JsonValue,
-    pub retry: bool,
+    pub retry: JsonValue,
     pub class: String,
     pub jid: String,
     pub created_at: f64,

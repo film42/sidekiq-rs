@@ -19,7 +19,7 @@ pub struct Builder {
     pub(crate) name: Option<String>,
     pub(crate) queue: Option<String>,
     pub(crate) args: Option<JsonValue>,
-    pub(crate) retry: Option<bool>,
+    pub(crate) retry: Option<JsonValue>,
     pub(crate) cron: Cron,
 }
 
@@ -66,7 +66,7 @@ impl Builder {
     }
 
     #[must_use]
-    pub fn retry(self, retry: bool) -> Self {
+    pub fn retry(self, retry: JsonValue) -> Self {
         Self {
             retry: Some(retry),
             ..self
@@ -100,7 +100,7 @@ impl Builder {
             ..Default::default()
         };
 
-        pj.retry = self.retry;
+        pj.retry = self.retry.clone();
         pj.queue = self.queue.clone();
         pj.args = self.args.clone().map(|a| a.to_string());
 
@@ -117,7 +117,7 @@ pub struct PeriodicJob {
     pub(crate) cron: String,
     pub(crate) queue: Option<String>,
     pub(crate) args: Option<String>,
-    retry: Option<bool>,
+    retry: Option<JsonValue>,
 
     #[serde(skip)]
     cron_schedule: Option<Cron>,
@@ -191,7 +191,7 @@ impl PeriodicJob {
             jid: new_jid(),
             created_at: chrono::Utc::now().timestamp() as f64,
             enqueued_at: None,
-            retry: self.retry.unwrap_or(false),
+            retry: self.retry.clone().unwrap_or(JsonValue::Bool(false)),
             args,
 
             // Make default eventually...
