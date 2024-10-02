@@ -1,5 +1,5 @@
 use super::Result;
-use crate::{new_jid, Error, Job, Processor, RedisConnection, RedisPool, Worker};
+use crate::{new_jid, Error, Job, Processor, RedisConnection, RedisPool, RetryOpts, Worker};
 pub use cron_clock::{Schedule as Cron, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -19,7 +19,7 @@ pub struct Builder {
     pub(crate) name: Option<String>,
     pub(crate) queue: Option<String>,
     pub(crate) args: Option<JsonValue>,
-    pub(crate) retry: Option<bool>,
+    pub(crate) retry: Option<RetryOpts>,
     pub(crate) cron: Cron,
 }
 
@@ -40,6 +40,18 @@ impl Builder {
             ..self
         }
     }
+
+    #[must_use]
+    pub fn retry<RO>(self, retry: RO) -> Builder
+    where
+        RO: Into<RetryOpts>,
+    {
+        Self {
+            retry: Some(retry.into()),
+            ..self
+        }
+    }
+
     pub fn queue<S: Into<String>>(self, queue: S) -> Builder {
         Builder {
             queue: Some(queue.into()),
@@ -63,14 +75,6 @@ impl Builder {
             args: Some(args),
             ..self
         })
-    }
-
-    #[must_use]
-    pub fn retry(self, retry: bool) -> Self {
-        Self {
-            retry: Some(retry),
-            ..self
-        }
     }
 
     pub async fn register<W, Args>(self, processor: &mut Processor, worker: W) -> Result<()>
@@ -100,7 +104,7 @@ impl Builder {
             ..Default::default()
         };
 
-        pj.retry = self.retry;
+        pj.retry = self.retry.clone();
         pj.queue = self.queue.clone();
         pj.args = self.args.clone().map(|a| a.to_string());
 
@@ -117,7 +121,7 @@ pub struct PeriodicJob {
     pub(crate) cron: String,
     pub(crate) queue: Option<String>,
     pub(crate) args: Option<String>,
-    retry: Option<bool>,
+    retry: Option<RetryOpts>,
 
     #[serde(skip)]
     cron_schedule: Option<Cron>,
@@ -191,7 +195,7 @@ impl PeriodicJob {
             jid: new_jid(),
             created_at: chrono::Utc::now().timestamp() as f64,
             enqueued_at: None,
-            retry: self.retry.unwrap_or(false),
+            retry: self.retry.clone().unwrap_or(RetryOpts::Never),
             args,
 
             // Make default eventually...

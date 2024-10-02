@@ -1,5 +1,5 @@
 use super::Result;
-use crate::{Counter, Job, RedisPool, UnitOfWork, WorkerRef};
+use crate::{Counter, Job, RedisPool, RetryOpts, UnitOfWork, WorkerRef};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -158,7 +158,13 @@ impl ServerMiddleware for RetryMiddleware {
         worker: Arc<WorkerRef>,
         redis: RedisPool,
     ) -> Result<()> {
-        let max_retries = worker.max_retries();
+        // Check the job for a max retries N in the retry field and then fall
+        // back to the worker default max retries.
+        let max_retries = if let RetryOpts::Max(max_retries) = job.retry {
+            max_retries
+        } else {
+            worker.max_retries()
+        };
 
         let err = {
             match chain.next(job, worker, redis.clone()).await {
@@ -180,7 +186,7 @@ impl ServerMiddleware for RetryMiddleware {
         job.retry_count = Some(retry_count);
 
         // Attempt the retry.
-        if retry_count > max_retries {
+        if retry_count > max_retries || job.retry == RetryOpts::Never {
             error!({
                 "status" = "fail",
                 "class" = &job.class,
@@ -207,7 +213,7 @@ impl ServerMiddleware for RetryMiddleware {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{RedisConnectionManager, RedisPool, Worker};
+    use crate::{RedisConnectionManager, RedisPool, RetryOpts, Worker};
     use bb8::Pool;
     use tokio::sync::Mutex;
 
@@ -221,7 +227,7 @@ mod test {
             class: "TestWorker".into(),
             queue: "default".into(),
             args: vec![1337].into(),
-            retry: true,
+            retry: RetryOpts::Yes,
             jid: crate::new_jid(),
             created_at: 1337.0,
             enqueued_at: None,

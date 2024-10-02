@@ -57,14 +57,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub fn opts() -> EnqueueOpts {
     EnqueueOpts {
         queue: "default".into(),
-        retry: true,
+        retry: RetryOpts::Yes,
         unique_for: None,
     }
 }
 
 pub struct EnqueueOpts {
     queue: String,
-    retry: bool,
+    retry: RetryOpts,
     unique_for: Option<std::time::Duration>,
 }
 
@@ -78,8 +78,14 @@ impl EnqueueOpts {
     }
 
     #[must_use]
-    pub fn retry(self, retry: bool) -> Self {
-        Self { retry, ..self }
+    pub fn retry<RO>(self, retry: RO) -> Self
+    where
+        RO: Into<RetryOpts>,
+    {
+        Self {
+            retry: retry.into(),
+            ..self
+        }
     }
 
     #[must_use]
@@ -106,7 +112,7 @@ impl EnqueueOpts {
             jid: new_jid(),
             created_at: chrono::Utc::now().timestamp() as f64,
             enqueued_at: None,
-            retry: self.retry,
+            retry: self.retry.clone(),
             args,
 
             // Make default eventually...
@@ -178,7 +184,7 @@ fn new_jid() -> String {
 
 pub struct WorkerOpts<Args, W: Worker<Args> + ?Sized> {
     queue: String,
-    retry: bool,
+    retry: RetryOpts,
     args: PhantomData<Args>,
     worker: PhantomData<W>,
     unique_for: Option<std::time::Duration>,
@@ -192,7 +198,7 @@ where
     pub fn new() -> Self {
         Self {
             queue: "default".into(),
-            retry: true,
+            retry: RetryOpts::Yes,
             args: PhantomData,
             worker: PhantomData,
             unique_for: None,
@@ -200,8 +206,14 @@ where
     }
 
     #[must_use]
-    pub fn retry(self, retry: bool) -> Self {
-        Self { retry, ..self }
+    pub fn retry<RO>(self, retry: RO) -> Self
+    where
+        RO: Into<RetryOpts>,
+    {
+        Self {
+            retry: retry.into(),
+            ..self
+        }
     }
 
     #[must_use]
@@ -250,7 +262,7 @@ where
 impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
     fn from(opts: &WorkerOpts<Args, W>) -> Self {
         Self {
-            retry: opts.retry,
+            retry: opts.retry.clone(),
             queue: opts.queue.clone(),
             unique_for: opts.unique_for,
         }
@@ -391,6 +403,31 @@ impl WorkerRef {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum RetryOpts {
+    #[serde(rename = "true")]
+    Yes,
+    #[serde(rename = "false")]
+    Never,
+    Max(usize),
+}
+
+impl From<bool> for RetryOpts {
+    fn from(value: bool) -> Self {
+        match value {
+            true => RetryOpts::Yes,
+            false => RetryOpts::Never,
+        }
+    }
+}
+
+impl From<usize> for RetryOpts {
+    fn from(value: usize) -> Self {
+        RetryOpts::Max(value)
+    }
+}
+
 //
 // {
 //   "retry": true,
@@ -410,7 +447,7 @@ impl WorkerRef {
 pub struct Job {
     pub queue: String,
     pub args: JsonValue,
-    pub retry: bool,
+    pub retry: RetryOpts,
     pub class: String,
     pub jid: String,
     pub created_at: f64,
@@ -532,6 +569,30 @@ mod test {
         pub mod cool {
             pub mod workers {
                 use super::super::super::super::*;
+
+                pub struct TestOpts;
+
+                #[async_trait]
+                impl Worker<()> for TestOpts {
+                    fn opts() -> WorkerOpts<(), Self>
+                    where
+                        Self: Sized,
+                    {
+                        WorkerOpts::new()
+                            // Test bool
+                            .retry(false)
+                            // Test usize
+                            .retry(42)
+                            // Test the new type
+                            .retry(RetryOpts::Never)
+                            .unique_for(std::time::Duration::from_secs(30))
+                            .queue("yolo_quue")
+                    }
+
+                    async fn perform(&self, _args: ()) -> Result<()> {
+                        Ok(())
+                    }
+                }
 
                 pub struct X1Y2MyJob;
 
