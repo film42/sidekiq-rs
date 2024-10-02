@@ -111,7 +111,7 @@ impl StatsPublisher {
             .arg(stats.beat.timestamp())
             .arg("info")
             .arg(serde_json::to_string(&stats.info)?)
-            .query_async(conn.unnamespaced_borrow_mut())
+            .query_async::<_, ()>(conn.unnamespaced_borrow_mut())
             .await?;
 
         conn.expire(self.identity.clone(), 30).await?;
