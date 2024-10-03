@@ -240,7 +240,8 @@ impl Processor {
                     "UNKNOWN_HOSTNAME".to_string()
                 };
 
-                let stats_publisher = StatsPublisher::new(hostname, queues, busy_jobs);
+                let stats_publisher =
+                    StatsPublisher::new(hostname, queues, busy_jobs, self.config.num_workers);
 
                 loop {
                     // TODO: Use process count to meet a 5 second avg.

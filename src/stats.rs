@@ -58,6 +58,7 @@ pub struct StatsPublisher {
     queues: Vec<String>,
     started_at: chrono::DateTime<chrono::Utc>,
     busy_jobs: Counter,
+    concurrency: usize,
 }
 
 fn generate_identity(hostname: &String) -> String {
@@ -71,7 +72,12 @@ fn generate_identity(hostname: &String) -> String {
 
 impl StatsPublisher {
     #[must_use]
-    pub fn new(hostname: String, queues: Vec<String>, busy_jobs: Counter) -> Self {
+    pub fn new(
+        hostname: String,
+        queues: Vec<String>,
+        busy_jobs: Counter,
+        concurrency: usize,
+    ) -> Self {
         let identity = generate_identity(&hostname);
         let started_at = chrono::Utc::now();
 
@@ -81,6 +87,7 @@ impl StatsPublisher {
             queues,
             started_at,
             busy_jobs,
+            concurrency,
         }
     }
 
@@ -143,7 +150,7 @@ impl StatsPublisher {
 
             beat: chrono::Utc::now(),
             info: ProcessInfo {
-                concurrency: num_cpus::get(),
+                concurrency: self.concurrency,
                 hostname: self.hostname.clone(),
                 identity: self.identity.clone(),
                 queues: self.queues.clone(),
