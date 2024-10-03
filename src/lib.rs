@@ -99,7 +99,6 @@ impl EnqueueOpts {
         }
     }
 
-    #[must_use]
     pub fn create_job(&self, class: String, args: impl serde::Serialize) -> Result<Job> {
         let args = serde_json::to_value(args)?;
 
