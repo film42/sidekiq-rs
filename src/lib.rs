@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use middleware::Chain;
 use rand::{Rng, RngCore};
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, Deserializer, Visitor},
+    Deserialize, Serialize, Serializer,
+};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use std::future::Future;
@@ -96,7 +99,8 @@ impl EnqueueOpts {
         }
     }
 
-    fn create_job(&self, class: String, args: impl serde::Serialize) -> Result<Job> {
+    #[must_use]
+    pub fn create_job(&self, class: String, args: impl serde::Serialize) -> Result<Job> {
         let args = serde_json::to_value(args)?;
 
         // Ensure args are always wrapped in an array.
@@ -233,7 +237,7 @@ where
     }
 
     #[allow(clippy::wrong_self_convention)]
-    fn into_opts(&self) -> EnqueueOpts {
+    pub fn into_opts(&self) -> EnqueueOpts {
         self.into()
     }
 
@@ -403,14 +407,68 @@ impl WorkerRef {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum RetryOpts {
-    #[serde(rename = "true")]
     Yes,
-    #[serde(rename = "false")]
     Never,
     Max(usize),
+}
+
+impl Serialize for RetryOpts {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match *self {
+            RetryOpts::Yes => serializer.serialize_bool(true),
+            RetryOpts::Never => serializer.serialize_bool(false),
+            RetryOpts::Max(value) => serializer.serialize_u64(value as u64),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RetryOpts {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RetryOptsVisitor;
+
+        impl<'de> Visitor<'de> for RetryOptsVisitor {
+            type Value = RetryOpts;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a boolean, null, or a positive integer")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if value {
+                    Ok(RetryOpts::Yes)
+                } else {
+                    Ok(RetryOpts::Never)
+                }
+            }
+
+            fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RetryOpts::Never)
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RetryOpts::Max(value as usize))
+            }
+        }
+
+        deserializer.deserialize_any(RetryOptsVisitor)
+    }
 }
 
 impl From<bool> for RetryOpts {
@@ -463,8 +521,8 @@ pub struct Job {
 
 #[derive(Debug)]
 pub struct UnitOfWork {
-    queue: String,
-    job: Job,
+    pub queue: String,
+    pub job: Job,
 }
 
 impl UnitOfWork {
