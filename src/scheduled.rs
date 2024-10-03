@@ -21,13 +21,11 @@ impl Scheduled {
             let mut redis = self.redis.get().await?;
 
             let jobs: Vec<String> = redis
-                .zrangebyscore_limit(sorted_set.clone(), "-inf", now.timestamp(), 0, 100)
+                .zrangebyscore_limit(sorted_set.clone(), "-inf", now.timestamp(), 0, 10)
                 .await?;
 
-            n += jobs.len();
-
             for job in jobs {
-                if redis.zrem(sorted_set.clone(), job.clone()).await? {
+                if redis.zrem(sorted_set.clone(), job.clone()).await? > 0 {
                     let work = UnitOfWork::from_job_string(job)?;
 
                     debug!({
@@ -36,6 +34,8 @@ impl Scheduled {
                     },  "Enqueueing job");
 
                     work.enqueue_direct(&mut redis).await?;
+
+                    n += 1;
                 }
             }
         }

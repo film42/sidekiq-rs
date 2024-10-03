@@ -104,8 +104,8 @@ impl Builder {
             ..Default::default()
         };
 
-        pj.retry = self.retry.clone();
-        pj.queue = self.queue.clone();
+        pj.retry.clone_from(&self.retry);
+        pj.queue.clone_from(&self.queue);
         pj.args = self.args.clone().map(|a| a.to_string());
 
         pj.hydrate_attributes()?;
