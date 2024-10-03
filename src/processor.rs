@@ -89,7 +89,7 @@ impl Processor {
         self
     }
 
-    async fn fetch(&mut self) -> Result<Option<UnitOfWork>> {
+    pub async fn fetch(&mut self) -> Result<Option<UnitOfWork>> {
         let response: Option<(String, String)> = self
             .redis
             .get()
