@@ -200,8 +200,14 @@ impl ServerMiddleware for RetryMiddleware {
                 "class" = &job.class,
                 "jid" = &job.jid,
                 "queue" = &job.queue,
+                "retry_queue" = &job.retry_queue,
                 "err" = &job.error_message
             }, "Scheduling job for retry in the future");
+
+            // We will now make sure we use the new retry_queue option if set.
+            if let Some(ref retry_queue) = job.retry_queue {
+                job.queue = retry_queue.into();
+            }
 
             UnitOfWork::from_job(job).reenqueue(&redis).await?;
         }
@@ -233,8 +239,10 @@ mod test {
             enqueued_at: None,
             failed_at: None,
             error_message: None,
+            error_class: None,
             retry_count: None,
             retried_at: None,
+            retry_queue: None,
             unique_for: None,
         }
     }

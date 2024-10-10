@@ -289,4 +289,45 @@ mod test {
 
         assert_eq!(n_jobs_retried, 0, "no jobs in the retry queue");
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn can_retry_job_into_different_retry_queue() {
+        let worker = AlwaysFailWorker;
+        let queue = "failure_zone_max_on_job".to_string();
+        let retry_queue = "the_retry_queue".to_string();
+        let (mut p, redis) = new_base_processor(queue.clone()).await;
+        let (mut retry_p, _retry_redis) = new_base_processor(retry_queue.clone()).await;
+        p.register(worker.clone());
+
+        let mut job = AlwaysFailWorker::opts()
+            .queue(queue)
+            .retry(5)
+            .retry_queue(&retry_queue)
+            .perform_async(&redis, ())
+            .await
+            .expect("enqueues");
+
+        assert_eq!(p.process_one_tick_once().await.unwrap(), WorkFetcher::Done);
+        let sets = vec!["retry".to_string()];
+        let sched = Scheduled::new(redis.clone());
+        let future_date = chrono::Utc::now() + chrono::Duration::days(30);
+
+        // We should have one job that needs retrying.
+        let n_jobs_retried = sched.enqueue_jobs(future_date, &sets).await;
+        assert!(n_jobs_retried.is_ok());
+        let n_jobs_retried = n_jobs_retried.unwrap();
+        assert_eq!(n_jobs_retried, 1, "we have one job to retry in the queue");
+
+        // Let's grab that job.
+        let job = retry_p.fetch().await;
+        assert!(job.is_ok());
+        let job = job.unwrap();
+        assert!(job.is_some());
+        let job = job.unwrap();
+
+        assert_eq!(job.job.class, "AlwaysFailWorker");
+        assert_eq!(job.job.retry_queue, Some(retry_queue));
+        assert_eq!(job.job.retry_count, Some(1));
+    }
 }
