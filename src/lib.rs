@@ -62,6 +62,7 @@ pub fn opts() -> EnqueueOpts {
         queue: "default".into(),
         retry: RetryOpts::Yes,
         unique_for: None,
+        retry_queue: None,
     }
 }
 
@@ -69,6 +70,7 @@ pub struct EnqueueOpts {
     queue: String,
     retry: RetryOpts,
     unique_for: Option<std::time::Duration>,
+    retry_queue: Option<String>,
 }
 
 impl EnqueueOpts {
@@ -99,6 +101,14 @@ impl EnqueueOpts {
         }
     }
 
+    #[must_use]
+    pub fn retry_queue(self, retry_queue: String) -> Self {
+        Self {
+            retry_queue: Some(retry_queue),
+            ..self
+        }
+    }
+
     pub fn create_job(&self, class: String, args: impl serde::Serialize) -> Result<Job> {
         let args = serde_json::to_value(args)?;
 
@@ -120,11 +130,13 @@ impl EnqueueOpts {
 
             // Make default eventually...
             error_message: None,
+            error_class: None,
             failed_at: None,
             retry_count: None,
             retried_at: None,
 
             // Meta for enqueueing
+            retry_queue: self.retry_queue.clone(),
             unique_for: self.unique_for,
         })
     }
@@ -191,6 +203,7 @@ pub struct WorkerOpts<Args, W: Worker<Args> + ?Sized> {
     args: PhantomData<Args>,
     worker: PhantomData<W>,
     unique_for: Option<std::time::Duration>,
+    retry_queue: Option<String>,
 }
 
 impl<Args, W> WorkerOpts<Args, W>
@@ -205,6 +218,7 @@ where
             args: PhantomData,
             worker: PhantomData,
             unique_for: None,
+            retry_queue: None,
         }
     }
 
@@ -215,6 +229,14 @@ where
     {
         Self {
             retry: retry.into(),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn retry_queue<S: Into<String>>(self, retry_queue: S) -> Self {
+        Self {
+            retry_queue: Some(retry_queue.into()),
             ..self
         }
     }
@@ -268,6 +290,7 @@ impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
             retry: opts.retry.clone(),
             queue: opts.queue.clone(),
             unique_for: opts.unique_for,
+            retry_queue: opts.retry_queue.clone(),
         }
     }
 }
@@ -511,8 +534,10 @@ pub struct Job {
     pub enqueued_at: Option<f64>,
     pub failed_at: Option<f64>,
     pub error_message: Option<String>,
+    pub error_class: Option<String>,
     pub retry_count: Option<usize>,
     pub retried_at: Option<f64>,
+    pub retry_queue: Option<String>,
 
     #[serde(skip)]
     pub unique_for: Option<std::time::Duration>,
