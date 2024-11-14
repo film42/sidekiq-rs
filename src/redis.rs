@@ -237,7 +237,7 @@ impl RedisConnection {
             .await
     }
 
-    pub async fn zrem<V>(&mut self, key: String, value: V) -> Result<bool, RedisError>
+    pub async fn zrem<V>(&mut self, key: String, value: V) -> Result<usize, RedisError>
     where
         V: ToRedisArgs + Send + Sync,
     {

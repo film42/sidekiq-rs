@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use middleware::Chain;
 use rand::{Rng, RngCore};
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, Deserializer, Visitor},
+    Deserialize, Serialize, Serializer,
+};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use std::future::Future;
@@ -57,15 +60,17 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub fn opts() -> EnqueueOpts {
     EnqueueOpts {
         queue: "default".into(),
-        retry: true,
+        retry: RetryOpts::Yes,
         unique_for: None,
+        retry_queue: None,
     }
 }
 
 pub struct EnqueueOpts {
     queue: String,
-    retry: bool,
+    retry: RetryOpts,
     unique_for: Option<std::time::Duration>,
+    retry_queue: Option<String>,
 }
 
 impl EnqueueOpts {
@@ -78,8 +83,14 @@ impl EnqueueOpts {
     }
 
     #[must_use]
-    pub fn retry(self, retry: bool) -> Self {
-        Self { retry, ..self }
+    pub fn retry<RO>(self, retry: RO) -> Self
+    where
+        RO: Into<RetryOpts>,
+    {
+        Self {
+            retry: retry.into(),
+            ..self
+        }
     }
 
     #[must_use]
@@ -90,7 +101,15 @@ impl EnqueueOpts {
         }
     }
 
-    fn create_job(&self, class: String, args: impl serde::Serialize) -> Result<Job> {
+    #[must_use]
+    pub fn retry_queue(self, retry_queue: String) -> Self {
+        Self {
+            retry_queue: Some(retry_queue),
+            ..self
+        }
+    }
+
+    pub fn create_job(&self, class: String, args: impl serde::Serialize) -> Result<Job> {
         let args = serde_json::to_value(args)?;
 
         // Ensure args are always wrapped in an array.
@@ -106,16 +125,18 @@ impl EnqueueOpts {
             jid: new_jid(),
             created_at: chrono::Utc::now().timestamp() as f64,
             enqueued_at: None,
-            retry: self.retry,
+            retry: self.retry.clone(),
             args,
 
             // Make default eventually...
             error_message: None,
+            error_class: None,
             failed_at: None,
             retry_count: None,
             retried_at: None,
 
             // Meta for enqueueing
+            retry_queue: self.retry_queue.clone(),
             unique_for: self.unique_for,
         })
     }
@@ -178,10 +199,11 @@ fn new_jid() -> String {
 
 pub struct WorkerOpts<Args, W: Worker<Args> + ?Sized> {
     queue: String,
-    retry: bool,
+    retry: RetryOpts,
     args: PhantomData<Args>,
     worker: PhantomData<W>,
     unique_for: Option<std::time::Duration>,
+    retry_queue: Option<String>,
 }
 
 impl<Args, W> WorkerOpts<Args, W>
@@ -192,16 +214,31 @@ where
     pub fn new() -> Self {
         Self {
             queue: "default".into(),
-            retry: true,
+            retry: RetryOpts::Yes,
             args: PhantomData,
             worker: PhantomData,
             unique_for: None,
+            retry_queue: None,
         }
     }
 
     #[must_use]
-    pub fn retry(self, retry: bool) -> Self {
-        Self { retry, ..self }
+    pub fn retry<RO>(self, retry: RO) -> Self
+    where
+        RO: Into<RetryOpts>,
+    {
+        Self {
+            retry: retry.into(),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn retry_queue<S: Into<String>>(self, retry_queue: S) -> Self {
+        Self {
+            retry_queue: Some(retry_queue.into()),
+            ..self
+        }
     }
 
     #[must_use]
@@ -221,7 +258,7 @@ where
     }
 
     #[allow(clippy::wrong_self_convention)]
-    fn into_opts(&self) -> EnqueueOpts {
+    pub fn into_opts(&self) -> EnqueueOpts {
         self.into()
     }
 
@@ -250,9 +287,10 @@ where
 impl<Args, W: Worker<Args>> From<&WorkerOpts<Args, W>> for EnqueueOpts {
     fn from(opts: &WorkerOpts<Args, W>) -> Self {
         Self {
-            retry: opts.retry,
+            retry: opts.retry.clone(),
             queue: opts.queue.clone(),
             unique_for: opts.unique_for,
+            retry_queue: opts.retry_queue.clone(),
         }
     }
 }
@@ -391,6 +429,85 @@ impl WorkerRef {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum RetryOpts {
+    Yes,
+    Never,
+    Max(usize),
+}
+
+impl Serialize for RetryOpts {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match *self {
+            RetryOpts::Yes => serializer.serialize_bool(true),
+            RetryOpts::Never => serializer.serialize_bool(false),
+            RetryOpts::Max(value) => serializer.serialize_u64(value as u64),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RetryOpts {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RetryOptsVisitor;
+
+        impl<'de> Visitor<'de> for RetryOptsVisitor {
+            type Value = RetryOpts;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a boolean, null, or a positive integer")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if value {
+                    Ok(RetryOpts::Yes)
+                } else {
+                    Ok(RetryOpts::Never)
+                }
+            }
+
+            fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RetryOpts::Never)
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RetryOpts::Max(value as usize))
+            }
+        }
+
+        deserializer.deserialize_any(RetryOptsVisitor)
+    }
+}
+
+impl From<bool> for RetryOpts {
+    fn from(value: bool) -> Self {
+        match value {
+            true => RetryOpts::Yes,
+            false => RetryOpts::Never,
+        }
+    }
+}
+
+impl From<usize> for RetryOpts {
+    fn from(value: usize) -> Self {
+        RetryOpts::Max(value)
+    }
+}
+
 //
 // {
 //   "retry": true,
@@ -410,15 +527,17 @@ impl WorkerRef {
 pub struct Job {
     pub queue: String,
     pub args: JsonValue,
-    pub retry: bool,
+    pub retry: RetryOpts,
     pub class: String,
     pub jid: String,
     pub created_at: f64,
     pub enqueued_at: Option<f64>,
     pub failed_at: Option<f64>,
     pub error_message: Option<String>,
+    pub error_class: Option<String>,
     pub retry_count: Option<usize>,
     pub retried_at: Option<f64>,
+    pub retry_queue: Option<String>,
 
     #[serde(skip)]
     pub unique_for: Option<std::time::Duration>,
@@ -426,8 +545,8 @@ pub struct Job {
 
 #[derive(Debug)]
 pub struct UnitOfWork {
-    queue: String,
-    job: Job,
+    pub queue: String,
+    pub job: Job,
 }
 
 impl UnitOfWork {
@@ -532,6 +651,30 @@ mod test {
         pub mod cool {
             pub mod workers {
                 use super::super::super::super::*;
+
+                pub struct TestOpts;
+
+                #[async_trait]
+                impl Worker<()> for TestOpts {
+                    fn opts() -> WorkerOpts<(), Self>
+                    where
+                        Self: Sized,
+                    {
+                        WorkerOpts::new()
+                            // Test bool
+                            .retry(false)
+                            // Test usize
+                            .retry(42)
+                            // Test the new type
+                            .retry(RetryOpts::Never)
+                            .unique_for(std::time::Duration::from_secs(30))
+                            .queue("yolo_quue")
+                    }
+
+                    async fn perform(&self, _args: ()) -> Result<()> {
+                        Ok(())
+                    }
+                }
 
                 pub struct X1Y2MyJob;
 

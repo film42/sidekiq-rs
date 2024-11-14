@@ -89,7 +89,7 @@ impl Processor {
         self
     }
 
-    async fn fetch(&mut self) -> Result<Option<UnitOfWork>> {
+    pub async fn fetch(&mut self) -> Result<Option<UnitOfWork>> {
         let response: Option<(String, String)> = self
             .redis
             .get()
@@ -240,7 +240,8 @@ impl Processor {
                     "UNKNOWN_HOSTNAME".to_string()
                 };
 
-                let stats_publisher = StatsPublisher::new(hostname, queues, busy_jobs);
+                let stats_publisher =
+                    StatsPublisher::new(hostname, queues, busy_jobs, self.config.num_workers);
 
                 loop {
                     // TODO: Use process count to meet a 5 second avg.
