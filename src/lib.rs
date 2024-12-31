@@ -456,7 +456,7 @@ impl<'de> Deserialize<'de> for RetryOpts {
     {
         struct RetryOptsVisitor;
 
-        impl<'de> Visitor<'de> for RetryOptsVisitor {
+        impl Visitor<'_> for RetryOptsVisitor {
             type Value = RetryOpts;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
