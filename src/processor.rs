@@ -29,11 +29,14 @@ pub struct Processor {
     config: ProcessorConfig,
 }
 
-#[derive(Clone)]
-#[allow(clippy::manual_non_exhaustive)]
+#[derive(Default, Clone)]
+#[non_exhaustive]
 pub struct ProcessorConfig {
     /// The number of Sidekiq workers that can run at the same time. Adjust as needed based on
     /// your workload and resource (cpu/memory/etc) usage.
+    ///
+    /// This config value controls how many workers are spawned to handle the queues provided
+    /// to [`Processor::new`]. These workers will be shared across all of these queues.
     ///
     /// If your workload is largely CPU-bound (computationally expensive), this should probably
     /// match your CPU count. This is the default.
@@ -41,8 +44,19 @@ pub struct ProcessorConfig {
     /// If your workload is largely IO-bound (e.g. reading from a DB, making web requests and
     /// waiting for responses, etc), this can probably be quite a bit higher than your CPU count.
     pub num_workers: usize,
-    // Disallow consumers from directly creating a ProcessorConfig object.
-    _private: (),
+
+    /// Queue-specific configurations. The queues specified in this field do not need to match
+    /// the list of queues provided to [`Processor::new`].
+    pub queue_configs: BTreeMap<String, QueueConfig>,
+}
+
+#[derive(Default, Clone)]
+#[non_exhaustive]
+pub struct QueueConfig {
+    /// Similar to `ProcessorConfig#num_workers`, except allows configuring the number of
+    /// additional workers to dedicate to a specific queue. If provided, `num_workers` additional
+    /// workers will be created for this specific queue.
+    pub num_workers: usize,
 }
 
 impl ProcessorConfig {
@@ -51,14 +65,19 @@ impl ProcessorConfig {
         self.num_workers = num_workers;
         self
     }
+
+    #[must_use]
+    pub fn queue_config(mut self, queue: String, config: QueueConfig) -> Self {
+        self.queue_configs.insert(queue, config);
+        self
+    }
 }
 
-impl Default for ProcessorConfig {
-    fn default() -> Self {
-        Self {
-            num_workers: num_cpus::get(),
-            _private: Default::default(),
-        }
+impl QueueConfig {
+    #[must_use]
+    pub fn num_workers(mut self, num_workers: usize) -> Self {
+        self.num_workers = num_workers;
+        self
     }
 }
 
@@ -205,26 +224,54 @@ impl Processor {
     pub async fn run(self) {
         let mut join_set: JoinSet<()> = JoinSet::new();
 
-        // Start worker routines.
-        for i in 0..self.config.num_workers {
-            join_set.spawn({
-                let mut processor = self.clone();
-                let cancellation_token = self.cancellation_token.clone();
-
-                async move {
-                    loop {
-                        if let Err(err) = processor.process_one().await {
-                            error!("Error leaked out the bottom: {:?}", err);
-                        }
-
-                        if cancellation_token.is_cancelled() {
-                            break;
-                        }
+        // Logic for spawning shared workers (workers that handles multiple queues) and dedicated
+        // workers (workers that handle a single queue).
+        let spawn_worker = |mut processor: Processor,
+                            cancellation_token: CancellationToken,
+                            num: usize,
+                            dedicated_queue_name: Option<String>| {
+            async move {
+                loop {
+                    if let Err(err) = processor.process_one().await {
+                        error!("Error leaked out the bottom: {:?}", err);
                     }
 
-                    debug!("Broke out of loop for worker {}", i);
+                    if cancellation_token.is_cancelled() {
+                        break;
+                    }
                 }
-            });
+
+                let dedicated_queue_str = dedicated_queue_name
+                    .map(|name| format!(" dedicated to queue '{name}'"))
+                    .unwrap_or_default();
+                debug!("Broke out of loop for worker {num}{dedicated_queue_str}");
+            }
+        };
+
+        // Start worker routines.
+        for i in 0..self.config.num_workers {
+            join_set.spawn(spawn_worker(
+                self.clone(),
+                self.cancellation_token.clone(),
+                i,
+                None,
+            ));
+        }
+
+        // Start dedicated worker routines.
+        for (queue, config) in &self.config.queue_configs {
+            for i in 0..config.num_workers {
+                join_set.spawn({
+                    let mut processor = self.clone();
+                    processor.queues = [queue.clone()].into();
+                    spawn_worker(
+                        processor,
+                        self.cancellation_token.clone(),
+                        i,
+                        Some(queue.clone()),
+                    )
+                });
+            }
         }
 
         // Start sidekiq-web metrics publisher.
