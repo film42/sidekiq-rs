@@ -2,7 +2,10 @@
 mod test {
     use async_trait::async_trait;
     use bb8::Pool;
-    use sidekiq::{Processor, RedisConnectionManager, RedisPool, Result, WorkFetcher, Worker};
+    use sidekiq::{
+        Processor, ProcessorConfig, QueueConfig, RedisConnectionManager, RedisPool, Result,
+        WorkFetcher, Worker,
+    };
     use std::sync::{Arc, Mutex};
 
     #[async_trait]
@@ -28,7 +31,18 @@ mod test {
         redis.flushall().await;
 
         // Sidekiq server
-        let p = Processor::new(redis.clone(), vec![queue]);
+        let p = Processor::new(redis.clone(), vec![queue]).with_config(
+            ProcessorConfig::default()
+                .num_workers(1)
+                .queue_config(
+                    "dedicated queue 1".to_string(),
+                    QueueConfig::default().num_workers(10),
+                )
+                .queue_config(
+                    "dedicated queue 2".to_string(),
+                    QueueConfig::default().num_workers(100),
+                ),
+        );
 
         (p, redis)
     }
