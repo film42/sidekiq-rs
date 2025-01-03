@@ -3,7 +3,7 @@ use crate::{
     periodic::PeriodicJob, Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware,
     StatsPublisher, UnitOfWork, Worker, WorkerRef,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use tokio::select;
 use tokio::task::JoinSet;
@@ -19,7 +19,7 @@ pub enum WorkFetcher {
 #[derive(Clone)]
 pub struct Processor {
     redis: RedisPool,
-    queues: Vec<String>,
+    queues: VecDeque<String>,
     human_readable_queues: Vec<String>,
     periodic_jobs: Vec<PeriodicJob>,
     workers: BTreeMap<String, Arc<WorkerRef>>,
@@ -45,9 +45,32 @@ pub struct ProcessorConfig {
     /// waiting for responses, etc), this can probably be quite a bit higher than your CPU count.
     pub num_workers: usize,
 
+    /// The strategy for balancing the priority of fetching queues' jobs from Redis. Defaults
+    /// to [`BalanceStrategy::RoundRobin`].
+    ///
+    /// The Redis API used to fetch jobs ([brpop](https://redis.io/docs/latest/commands/brpop/))
+    /// checks queues for jobs in the order the queues are provided. This means that if the first
+    /// queue in the list provided to [`Processor::new`] always has an item, the other queues
+    /// will never have their jobs run. To mitigate this, a [`BalanceStrategy`] can be provided
+    /// to allow ensuring that no queue is starved indefinitely.
+    pub balance_strategy: BalanceStrategy,
+
     /// Queue-specific configurations. The queues specified in this field do not need to match
     /// the list of queues provided to [`Processor::new`].
     pub queue_configs: BTreeMap<String, QueueConfig>,
+}
+
+#[derive(Default, Clone)]
+#[non_exhaustive]
+pub enum BalanceStrategy {
+    /// Rotate the list of queues by 1 every time jobs are fetched from Redis. This allows each
+    /// queue in the list to have an equal opportunity to have its jobs run.
+    #[default]
+    RoundRobin,
+    /// Do not modify the list of queues. Warning: This can lead to queue starvation! For example,
+    /// if the first queue in the list provided to [`Processor::new`] is heavily used and always
+    /// has a job available to run, then the jobs in the other queues will never run.
+    None,
 }
 
 #[derive(Default, Clone)]
@@ -63,6 +86,12 @@ impl ProcessorConfig {
     #[must_use]
     pub fn num_workers(mut self, num_workers: usize) -> Self {
         self.num_workers = num_workers;
+        self
+    }
+
+    #[must_use]
+    pub fn balance_strategy(mut self, balance_strategy: BalanceStrategy) -> Self {
+        self.balance_strategy = balance_strategy;
         self
     }
 
@@ -109,11 +138,13 @@ impl Processor {
     }
 
     pub async fn fetch(&mut self) -> Result<Option<UnitOfWork>> {
+        self.run_balance_strategy();
+
         let response: Option<(String, String)> = self
             .redis
             .get()
             .await?
-            .brpop(self.queues.clone(), 2)
+            .brpop(self.queues.clone().into(), 2)
             .await?;
 
         if let Some((queue, job_raw)) = response {
@@ -122,6 +153,18 @@ impl Processor {
         }
 
         Ok(None)
+    }
+
+    /// Re-order the `Processor#queues` based on the `ProcessorConfig#balance_strategy`.
+    fn run_balance_strategy(&mut self) {
+        if self.queues.is_empty() {
+            return;
+        }
+
+        match self.config.balance_strategy {
+            BalanceStrategy::RoundRobin => self.queues.rotate_right(1),
+            BalanceStrategy::None => {}
+        }
     }
 
     pub async fn process_one(&mut self) -> Result<()> {
