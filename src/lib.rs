@@ -26,7 +26,7 @@ pub use crate::redis::{
 };
 pub use ::redis as redis_rs;
 pub use middleware::{ChainIter, ServerMiddleware};
-pub use processor::{Processor, ProcessorConfig, WorkFetcher};
+pub use processor::{Processor, ProcessorConfig, QueueConfig, WorkFetcher};
 pub use scheduled::Scheduled;
 pub use stats::{Counter, StatsPublisher};
 
@@ -456,7 +456,7 @@ impl<'de> Deserialize<'de> for RetryOpts {
     {
         struct RetryOptsVisitor;
 
-        impl<'de> Visitor<'de> for RetryOptsVisitor {
+        impl Visitor<'_> for RetryOptsVisitor {
             type Value = RetryOpts;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
