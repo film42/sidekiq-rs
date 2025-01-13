@@ -3,8 +3,8 @@ mod test {
     use async_trait::async_trait;
     use bb8::Pool;
     use sidekiq::{
-        Processor, ProcessorConfig, QueueConfig, RedisConnectionManager, RedisPool, Result,
-        WorkFetcher, Worker,
+        BalanceStrategy, Processor, ProcessorConfig, QueueConfig, RedisConnectionManager,
+        RedisPool, Result, WorkFetcher, Worker,
     };
     use std::sync::{Arc, Mutex};
 
@@ -34,6 +34,7 @@ mod test {
         let p = Processor::new(redis.clone(), vec![queue]).with_config(
             ProcessorConfig::default()
                 .num_workers(1)
+                .balance_strategy(BalanceStrategy::RoundRobin)
                 .queue_config(
                     "dedicated queue 1".to_string(),
                     QueueConfig::default().num_workers(10),
