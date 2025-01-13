@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use redis::AsyncCommands;
 use redis::ToRedisArgs;
 pub use redis::Value as RedisValue;
-use redis::{aio::Connection, ErrorKind};
+use redis::{aio::MultiplexedConnection as Connection, ErrorKind};
 use redis::{Client, IntoConnectionInfo};
 use std::ops::DerefMut;
 
@@ -56,7 +56,7 @@ impl ManageConnection for RedisConnectionManager {
 
     async fn connect(&self) -> Result<Self::Connection, Self::Error> {
         Ok(RedisConnection::new(
-            self.client.get_async_connection().await?,
+            self.client.get_multiplexed_async_connection().await?,
         ))
     }
 
@@ -134,7 +134,7 @@ impl RedisConnection {
         timeout: usize,
     ) -> Result<Option<(String, String)>, RedisError> {
         self.connection
-            .brpop(self.namespaced_keys(keys), timeout)
+            .brpop(self.namespaced_keys(keys), timeout as f64)
             .await
     }
 
@@ -150,7 +150,7 @@ impl RedisConnection {
 
     pub async fn expire(&mut self, key: String, value: usize) -> Result<usize, RedisError> {
         self.connection
-            .expire(self.namespaced_key(key), value)
+            .expire(self.namespaced_key(key), value as i64)
             .await
     }
 
