@@ -105,7 +105,8 @@ impl StatsPublisher {
     pub async fn publish_stats(&self, redis: RedisPool) -> Result<(), Box<dyn std::error::Error>> {
         let stats = self.create_process_stats().await?;
         let mut conn = redis.get().await?;
-        conn.cmd_with_key("HSET", self.identity.clone())
+        let _: () = conn
+            .cmd_with_key("HSET", self.identity.clone())
             .arg("rss")
             .arg(stats.rss)
             .arg("rtt_us")
@@ -118,7 +119,7 @@ impl StatsPublisher {
             .arg(stats.beat.timestamp())
             .arg("info")
             .arg(serde_json::to_string(&stats.info)?)
-            .query_async::<_, ()>(conn.unnamespaced_borrow_mut())
+            .query_async::<()>(conn.unnamespaced_borrow_mut())
             .await?;
 
         conn.expire(self.identity.clone(), 30).await?;
