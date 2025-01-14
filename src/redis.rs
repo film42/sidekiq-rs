@@ -1,14 +1,13 @@
 use bb8::{CustomizeConnection, ManageConnection, Pool};
-
-use async_trait::async_trait;
 use redis::AsyncCommands;
+pub use redis::RedisError;
 use redis::ToRedisArgs;
 pub use redis::Value as RedisValue;
 use redis::{aio::MultiplexedConnection as Connection, ErrorKind};
 use redis::{Client, IntoConnectionInfo};
+use std::future::Future;
 use std::ops::DerefMut;
-
-pub use redis::RedisError;
+use std::pin::Pin;
 
 pub type RedisPool = Pool<RedisConnectionManager>;
 
@@ -17,13 +16,17 @@ pub struct NamespaceCustomizer {
     namespace: String,
 }
 
-#[async_trait]
 impl CustomizeConnection<RedisConnection, RedisError> for NamespaceCustomizer {
-    async fn on_acquire(&self, connection: &mut RedisConnection) -> Result<(), RedisError> {
-        // All redis operations used by the sidekiq lib will use this as a prefix.
-        connection.set_namespace(self.namespace.clone());
+    fn on_acquire<'a>(
+        &'a self,
+        connection: &'a mut RedisConnection,
+    ) -> Pin<Box<dyn Future<Output = Result<(), RedisError>> + Send + 'a>> {
+        Box::pin(async {
+            // All redis operations used by the sidekiq lib will use this as a prefix.
+            connection.set_namespace(self.namespace.clone());
 
-        Ok(())
+            Ok(())
+        })
     }
 }
 
@@ -49,7 +52,6 @@ impl RedisConnectionManager {
     }
 }
 
-#[async_trait]
 impl ManageConnection for RedisConnectionManager {
     type Connection = RedisConnection;
     type Error = RedisError;
