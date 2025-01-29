@@ -856,4 +856,18 @@ mod test {
         .unwrap();
         wrap.call(arg).await.unwrap();
     }
+
+    #[tokio::test]
+    async fn processor_config_has_workers_by_default() {
+        let cfg = ProcessorConfig::default();
+
+        assert!(
+            cfg.num_workers > 0,
+            "num_workers should be greater than 0 (using num cpu)"
+        );
+
+        let cfg = cfg.num_workers(1000);
+
+        assert_eq!(cfg.num_workers, 1000);
+    }
 }
