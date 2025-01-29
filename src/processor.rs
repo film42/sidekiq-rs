@@ -29,7 +29,7 @@ pub struct Processor {
     config: ProcessorConfig,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct ProcessorConfig {
     /// The number of Sidekiq workers that can run at the same time. Adjust as needed based on
@@ -99,6 +99,16 @@ impl ProcessorConfig {
     pub fn queue_config(mut self, queue: String, config: QueueConfig) -> Self {
         self.queue_configs.insert(queue, config);
         self
+    }
+}
+
+impl Default for ProcessorConfig {
+    fn default() -> Self {
+        Self {
+            num_workers: num_cpus::get(),
+            balance_strategy: Default::default(),
+            queue_configs: Default::default(),
+        }
     }
 }
 
