@@ -567,7 +567,7 @@ impl UnitOfWork {
     #[must_use]
     pub fn from_job(job: Job) -> Self {
         Self {
-            queue: format!("queue:{}", &job.queue),
+            queue: format!("queue:{}", job.queue),
             job,
         }
     }
@@ -594,7 +594,7 @@ impl UnitOfWork {
             let args_hash = format!("{:x}", Sha256::digest(&args_as_json_string));
             let redis_key = format!(
                 "sidekiq:unique:{}:{}:{}",
-                &job.queue, &job.class, &args_hash
+                job.queue, job.class, args_hash
             );
             let result = redis
                 .set_nx_ex(redis_key, "", duration.as_secs() as usize)

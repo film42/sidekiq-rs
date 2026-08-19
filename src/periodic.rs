@@ -169,7 +169,7 @@ impl PeriodicJob {
 
         Err(Error::Message(format!(
             "Unable to fetch next schedled time for periodic job: class: {}, name: {}",
-            &self.class, &self.name
+            self.class, self.name
         )))
     }
 
