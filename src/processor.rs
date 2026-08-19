@@ -4,7 +4,8 @@ use crate::{
     Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware, StatsPublisher, UnitOfWork,
     Worker, WorkerRef, periodic::PeriodicJob,
 };
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::future::Future;
 use std::sync::Arc;
 use tokio::select;
 use tokio::task::JoinSet;
@@ -378,17 +379,17 @@ impl Processor {
             self.config.num_workers,
         );
         let identity = stats_publisher.identity().to_string();
+        let mut task_names: HashMap<tokio::task::Id, String> = HashMap::new();
 
         // Logic for spawning shared workers (workers that handles multiple queues) and dedicated
         // workers (workers that handle a single queue).
         let spawn_worker = |mut processor: Processor,
                             cancellation_token: CancellationToken,
-                            num: usize,
-                            dedicated_queue_name: Option<String>| {
+                            task_name: String| {
             async move {
                 loop {
-                    if let Err(err) = processor.process_one().await {
-                        error!("Error leaked out the bottom: {:?}", err);
+                    if let Err(error) = processor.process_one().await {
+                        error!(%task_name, ?error, "Error leaked out the bottom");
                     }
 
                     if cancellation_token.is_cancelled() {
@@ -396,10 +397,10 @@ impl Processor {
                     }
                 }
 
-                let dedicated_queue_str = dedicated_queue_name
-                    .map(|name| format!(" dedicated to queue '{name}'"))
-                    .unwrap_or_default();
-                debug!("Broke out of loop for worker {num}{dedicated_queue_str}");
+                debug!(
+                    %task_name,
+                    "Broke out of worker loop"
+                );
             }
         };
 
@@ -408,36 +409,36 @@ impl Processor {
             let mut processor = self.clone();
             processor.identity = Some(identity.clone());
             processor.tid = Some(generate_tid());
-            join_set.spawn(spawn_worker(
-                processor,
-                self.cancellation_token.clone(),
-                i,
-                None,
-            ));
+            let name = format!("shared-worker-{i}");
+            spawn_named(
+                &mut join_set,
+                &mut task_names,
+                name.clone(),
+                spawn_worker(processor, self.cancellation_token.clone(), name),
+            );
         }
 
         // Start dedicated worker routines.
         for (queue, config) in &self.config.queue_configs {
             for i in 0..config.num_workers {
-                join_set.spawn({
-                    let mut processor = self.clone();
-                    processor.queues = [queue.clone()].into();
-                    processor.identity = Some(identity.clone());
-                    processor.tid = Some(generate_tid());
-                    spawn_worker(
-                        processor,
-                        self.cancellation_token.clone(),
-                        i,
-                        Some(queue.clone()),
-                    )
-                });
+                let mut processor = self.clone();
+                processor.queues = [queue.clone()].into();
+                processor.identity = Some(identity.clone());
+                processor.tid = Some(generate_tid());
+                let name = format!("worker-{i}-queue-{queue}");
+                spawn_named(
+                    &mut join_set,
+                    &mut task_names,
+                    name.clone(),
+                    spawn_worker(processor, self.cancellation_token.clone(), name),
+                );
             }
         }
 
         if self.config.enable_stats {
             // Start sidekiq-web metrics publisher. Consumes the `stats_publisher` built
             // above (whose identity the workers share for the WorkSet).
-            join_set.spawn({
+            spawn_named(&mut join_set, &mut task_names, "stats", {
                 let redis = self.redis.clone();
                 let cancellation_token = self.cancellation_token.clone();
                 async move {
@@ -450,8 +451,8 @@ impl Processor {
                             }
                         }
 
-                        if let Err(err) = stats_publisher.publish_stats(redis.clone()).await {
-                            error!("Error publishing processor stats: {:?}", err);
+                        if let Err(error) = stats_publisher.publish_stats(redis.clone()).await {
+                            error!(?error, "Error publishing processor stats");
                         }
                     }
 
@@ -463,11 +464,10 @@ impl Processor {
                     // heartbeat hash's 60-second TTL expires — but the set membership has no TTL
                     // and never self-cleans.
                     let identity = stats_publisher.identity().to_string();
-                    if let Err(err) = stats_publisher.deregister(redis.clone()).await {
+                    if let Err(error) = stats_publisher.deregister(redis.clone()).await {
                         error!(
-                            identity = %identity,
-                            "Error deregistering processor from Redis on shutdown: {:?}",
-                            err
+                            ?error,
+                            "Error deregistering processor from Redis on shutdown",
                         );
                     }
 
@@ -478,7 +478,7 @@ impl Processor {
 
         if self.config.enable_scheduled {
             // Start retry and scheduled routines.
-            join_set.spawn({
+            spawn_named(&mut join_set, &mut task_names, "retry-and-scheduled", {
                 let redis = self.redis.clone();
                 let cancellation_token = self.cancellation_token.clone();
                 async move {
@@ -494,9 +494,10 @@ impl Processor {
                             }
                         }
 
-                        if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await
+                        if let Err(error) =
+                            sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await
                         {
-                            error!("Error in scheduled poller routine: {:?}", err);
+                            error!(?error, "Error in scheduled poller routine");
                         }
                     }
 
@@ -507,7 +508,7 @@ impl Processor {
 
         if self.config.enable_periodic {
             // Watch for periodic jobs and enqueue jobs.
-            join_set.spawn({
+            spawn_named(&mut join_set, &mut task_names, "periodic", {
                 let redis = self.redis.clone();
                 let cancellation_token = self.cancellation_token.clone();
                 async move {
@@ -522,8 +523,8 @@ impl Processor {
                             }
                         }
 
-                        if let Err(err) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
-                            error!("Error in periodic job poller routine: {}", err);
+                        if let Err(error) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
+                            error!(?error, "Error in periodic job poller routine");
                         }
                     }
 
@@ -532,9 +533,14 @@ impl Processor {
             });
         }
 
-        while let Some(result) = join_set.join_next().await {
-            if let Err(err) = result {
-                error!("Processor had a spawned task return an error: {}", err);
+        while let Some(result) = join_set.join_next_with_id().await {
+            if let Err(error) = result {
+                let task_name = take_task_name(&mut task_names, error.id());
+                error!(
+                    %task_name,
+                    ?error,
+                    "Processor had a spawned task return an error",
+                );
             }
         }
     }
@@ -545,6 +551,22 @@ impl Processor {
     {
         self.chain.using(Box::new(middleware)).await;
     }
+}
+
+fn spawn_named<F>(
+    join_set: &mut JoinSet<()>,
+    names: &mut HashMap<tokio::task::Id, String>,
+    name: impl Into<String>,
+    fut: F,
+) where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let handle = join_set.spawn(fut);
+    names.insert(handle.id(), name.into());
+}
+
+fn take_task_name(names: &mut HashMap<tokio::task::Id, String>, id: tokio::task::Id) -> String {
+    names.remove(&id).unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Build the value stored in the `<identity>:work` hash for an in-flight job,
