@@ -1,8 +1,8 @@
 use super::Result;
 use crate::stats::generate_tid;
 use crate::{
-    periodic::PeriodicJob, Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware,
-    StatsPublisher, UnitOfWork, Worker, WorkerRef,
+    Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware, StatsPublisher, UnitOfWork,
+    Worker, WorkerRef, periodic::PeriodicJob,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -65,6 +65,18 @@ pub struct ProcessorConfig {
     /// Queue-specific configurations. The queues specified in this field do not need to match
     /// the list of queues provided to [`Processor::new`].
     pub queue_configs: BTreeMap<String, QueueConfig>,
+
+    /// When `true` (the default), [`Processor::run`] polls Redis `retry` and `schedule`
+    /// sorted sets and re-enqueues due jobs. Disable when another process owns scheduling.
+    pub enable_scheduled: bool,
+
+    /// When `true` (the default), [`Processor::run`] polls and enqueues periodic/cron jobs.
+    pub enable_periodic: bool,
+
+    /// When `true` (the default), [`Processor::run`] publishes Sidekiq-web heartbeats
+    /// (`processes` set + WorkSet). Workers still get a process identity for WorkSet
+    /// bookkeeping either way.
+    pub enable_stats: bool,
 }
 
 #[derive(Default, Clone)]
@@ -107,6 +119,24 @@ impl ProcessorConfig {
         self.queue_configs.insert(queue, config);
         self
     }
+
+    #[must_use]
+    pub fn enable_scheduled(mut self, enable_scheduled: bool) -> Self {
+        self.enable_scheduled = enable_scheduled;
+        self
+    }
+
+    #[must_use]
+    pub fn enable_periodic(mut self, enable_periodic: bool) -> Self {
+        self.enable_periodic = enable_periodic;
+        self
+    }
+
+    #[must_use]
+    pub fn enable_stats(mut self, enable_stats: bool) -> Self {
+        self.enable_stats = enable_stats;
+        self
+    }
 }
 
 impl Default for ProcessorConfig {
@@ -115,6 +145,9 @@ impl Default for ProcessorConfig {
             num_workers: num_cpus::get(),
             balance_strategy: Default::default(),
             queue_configs: Default::default(),
+            enable_scheduled: true,
+            enable_periodic: true,
+            enable_stats: true,
         }
     }
 }
@@ -231,10 +264,7 @@ impl Processor {
         // Publish this job to the Sidekiq WorkSet (`<identity>:work`) so it shows
         // on the web "Busy" page, then clear it whether the job succeeds or fails.
         self.set_work(&work).await;
-        let result = self
-            .chain
-            .call(&work.job, worker, self.redis.clone())
-            .await;
+        let result = self.chain.call(&work.job, worker, self.redis.clone()).await;
         self.clear_work().await;
         result?;
 
@@ -404,96 +434,103 @@ impl Processor {
             }
         }
 
-        // Start sidekiq-web metrics publisher. Consumes the `stats_publisher` built
-        // above (whose identity the workers share for the WorkSet).
-        join_set.spawn({
-            let redis = self.redis.clone();
-            let cancellation_token = self.cancellation_token.clone();
-            async move {
-                loop {
-                    // TODO: Use process count to meet a 5 second avg.
-                    select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                        _ = cancellation_token.cancelled() => {
-                            break;
+        if self.config.enable_stats {
+            // Start sidekiq-web metrics publisher. Consumes the `stats_publisher` built
+            // above (whose identity the workers share for the WorkSet).
+            join_set.spawn({
+                let redis = self.redis.clone();
+                let cancellation_token = self.cancellation_token.clone();
+                async move {
+                    loop {
+                        // TODO: Use process count to meet a 5 second avg.
+                        select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                            _ = cancellation_token.cancelled() => {
+                                break;
+                            }
+                        }
+
+                        if let Err(err) = stats_publisher.publish_stats(redis.clone()).await {
+                            error!("Error publishing processor stats: {:?}", err);
                         }
                     }
 
-                    if let Err(err) = stats_publisher.publish_stats(redis.clone()).await {
-                        error!("Error publishing processor stats: {:?}", err);
+                    // On graceful shutdown, remove the process from the `processes` set and
+                    // delete the heartbeat hash. This mirrors Ruby Sidekiq's clear_heartbeat():
+                    //   pipeline.srem("processes", [identity])
+                    //   pipeline.unlink("#{identity}:work")
+                    // Without this, stale entries accumulate in the `processes` set until the
+                    // heartbeat hash's 60-second TTL expires — but the set membership has no TTL
+                    // and never self-cleans.
+                    let identity = stats_publisher.identity().to_string();
+                    if let Err(err) = stats_publisher.deregister(redis.clone()).await {
+                        error!(
+                            identity = %identity,
+                            "Error deregistering processor from Redis on shutdown: {:?}",
+                            err
+                        );
                     }
+
+                    debug!(identity = %identity, "Deregistered processor from Redis");
                 }
+            });
+        }
 
-                // On graceful shutdown, remove the process from the `processes` set and
-                // delete the heartbeat hash. This mirrors Ruby Sidekiq's clear_heartbeat():
-                //   pipeline.srem("processes", [identity])
-                //   pipeline.unlink("#{identity}:work")
-                // Without this, stale entries accumulate in the `processes` set until the
-                // heartbeat hash's 60-second TTL expires — but the set membership has no TTL
-                // and never self-cleans.
-                let identity = stats_publisher.identity().to_string();
-                if let Err(err) = stats_publisher.deregister(redis.clone()).await {
-                    error!(
-                        identity = %identity,
-                        "Error deregistering processor from Redis on shutdown: {:?}",
-                        err
-                    );
-                }
+        if self.config.enable_scheduled {
+            // Start retry and scheduled routines.
+            join_set.spawn({
+                let redis = self.redis.clone();
+                let cancellation_token = self.cancellation_token.clone();
+                async move {
+                    let sched = Scheduled::new(redis);
+                    let sorted_sets = vec!["retry".to_string(), "schedule".to_string()];
 
-                debug!(identity = %identity, "Deregistered processor from Redis");
-            }
-        });
+                    loop {
+                        // TODO: Use process count to meet a 5 second avg.
+                        select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                            _ = cancellation_token.cancelled() => {
+                                break;
+                            }
+                        }
 
-        // Start retry and scheduled routines.
-        join_set.spawn({
-            let redis = self.redis.clone();
-            let cancellation_token = self.cancellation_token.clone();
-            async move {
-                let sched = Scheduled::new(redis);
-                let sorted_sets = vec!["retry".to_string(), "schedule".to_string()];
-
-                loop {
-                    // TODO: Use process count to meet a 5 second avg.
-                    select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                        _ = cancellation_token.cancelled() => {
-                            break;
+                        if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await
+                        {
+                            error!("Error in scheduled poller routine: {:?}", err);
                         }
                     }
 
-                    if let Err(err) = sched.enqueue_jobs(chrono::Utc::now(), &sorted_sets).await {
-                        error!("Error in scheduled poller routine: {:?}", err);
-                    }
+                    debug!("Broke out of loop for retry and scheduled");
                 }
+            });
+        }
 
-                debug!("Broke out of loop for retry and scheduled");
-            }
-        });
+        if self.config.enable_periodic {
+            // Watch for periodic jobs and enqueue jobs.
+            join_set.spawn({
+                let redis = self.redis.clone();
+                let cancellation_token = self.cancellation_token.clone();
+                async move {
+                    let sched = Scheduled::new(redis);
 
-        // Watch for periodic jobs and enqueue jobs.
-        join_set.spawn({
-            let redis = self.redis.clone();
-            let cancellation_token = self.cancellation_token.clone();
-            async move {
-                let sched = Scheduled::new(redis);
+                    loop {
+                        // TODO: Use process count to meet a 30 second avg.
+                        select! {
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+                            _ = cancellation_token.cancelled() => {
+                                break;
+                            }
+                        }
 
-                loop {
-                    // TODO: Use process count to meet a 30 second avg.
-                    select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
-                        _ = cancellation_token.cancelled() => {
-                            break;
+                        if let Err(err) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
+                            error!("Error in periodic job poller routine: {}", err);
                         }
                     }
 
-                    if let Err(err) = sched.enqueue_periodic_jobs(chrono::Utc::now()).await {
-                        error!("Error in periodic job poller routine: {}", err);
-                    }
+                    debug!("Broke out of loop for periodic");
                 }
-
-                debug!("Broke out of loop for periodic");
-            }
-        });
+            });
+        }
 
         while let Some(result) = join_set.join_next().await {
             if let Err(err) = result {
