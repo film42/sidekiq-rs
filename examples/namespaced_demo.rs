@@ -45,6 +45,6 @@ async fn main() -> Result<()> {
     p.register(HelloWorker);
 
     // Start!
-    p.run().await;
+    p.run().await?;
     Ok(())
 }

@@ -64,6 +64,6 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-    p.run().await;
+    p.run().await?;
     Ok(())
 }

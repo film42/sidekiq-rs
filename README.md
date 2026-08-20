@@ -134,7 +134,7 @@ p.using(FilterExpiredUsersMiddleware::new())
     .await;
 
 // Start the server
-p.run().await;
+p.run().await?;
 ```
 
 
@@ -268,7 +268,7 @@ async fn main() -> Result<()> {
         redis_fetch,
         vec!["default".to_string()],
     );
-    p.run().await;
+    p.run().await?;
 
     // ...
 

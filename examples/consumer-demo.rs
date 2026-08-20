@@ -199,6 +199,6 @@ async fn main() -> Result<()> {
     //        .register(&mut p, PaymentReportWorker::new(logger.clone()))
     //        .await?;
 
-    p.run().await;
+    p.run().await?;
     Ok(())
 }

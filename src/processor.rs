@@ -1,4 +1,5 @@
 use super::Result;
+use crate::Error;
 use crate::stats::generate_tid;
 use crate::{
     Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware, StatsPublisher, UnitOfWork,
@@ -359,7 +360,11 @@ impl Processor {
 
     /// Takes self to consume the processor. This is for life-cycle management, not
     /// memory safety because you can clone processor pretty easily.
-    pub async fn run(self) {
+    ///
+    /// Returns `Ok(())` after a graceful cancellation (via [`Self::get_cancellation_token`]).
+    /// If a spawned task panics or a worker loop exits without cancellation, remaining
+    /// tasks are cancelled and this returns `Err`.
+    pub async fn run(self) -> Result<()> {
         let mut join_set: JoinSet<()> = JoinSet::new();
 
         // Build the stats publisher up front so its process identity can be shared
@@ -533,15 +538,49 @@ impl Processor {
             });
         }
 
+        let mut fatal: Option<Error> = None;
         while let Some(result) = join_set.join_next_with_id().await {
-            if let Err(error) = result {
-                let task_name = take_task_name(&mut task_names, error.id());
-                error!(
-                    %task_name,
-                    ?error,
-                    "Processor had a spawned task return an error",
-                );
+            match result {
+                Ok((id, ())) if self.cancellation_token.is_cancelled() => {
+                    // Task exited gracefully when the cancellation token was cancelled.
+                    task_names.remove(&id);
+                }
+                Ok((id, ())) => {
+                    // Task exited unexpectedly.
+                    let task_name = take_task_name(&mut task_names, id);
+                    error!(
+                        %task_name,
+                        "Processor worker exited unexpectedly. Cancelling remaining tasks."
+                    );
+                    self.cancellation_token.cancel();
+                    fatal.get_or_insert_with(|| {
+                        Error::Message(format!(
+                            "Processor worker '{task_name}' exited unexpectedly"
+                        ))
+                    });
+                }
+                Err(join_err) => {
+                    // Task panicked.
+                    let task_name = take_task_name(&mut task_names, join_err.id());
+                    error!(
+                        %task_name,
+                        error = ?join_err,
+                        "Processor had a spawned task return an error. Cancelling remaining tasks.",
+                    );
+                    self.cancellation_token.cancel();
+                    fatal.get_or_insert_with(|| {
+                        Error::Message(format!(
+                            "Processor worker '{task_name}' panicked: {join_err}"
+                        ))
+                    });
+                }
             }
+        }
+
+        // If any task panicked or exited unexpectedly, return an error.
+        match fatal {
+            Some(err) => Err(err),
+            None => Ok(()),
         }
     }
 
