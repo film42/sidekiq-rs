@@ -1,5 +1,5 @@
 use super::Result;
-use crate::{new_jid, Error, Job, Processor, RedisConnection, RedisPool, RetryOpts, Worker};
+use crate::{Error, Job, Processor, RedisConnection, RedisPool, RetryOpts, Worker, new_jid};
 pub use cron_clock::{Schedule as Cron, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;

@@ -1,8 +1,8 @@
 use super::Result;
 use crate::stats::generate_tid;
 use crate::{
-    periodic::PeriodicJob, Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware,
-    StatsPublisher, UnitOfWork, Worker, WorkerRef,
+    Chain, Counter, Job, RedisPool, Scheduled, ServerMiddleware, StatsPublisher, UnitOfWork,
+    Worker, WorkerRef, periodic::PeriodicJob,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
@@ -231,10 +231,7 @@ impl Processor {
         // Publish this job to the Sidekiq WorkSet (`<identity>:work`) so it shows
         // on the web "Busy" page, then clear it whether the job succeeds or fails.
         self.set_work(&work).await;
-        let result = self
-            .chain
-            .call(&work.job, worker, self.redis.clone())
-            .await;
+        let result = self.chain.call(&work.job, worker, self.redis.clone()).await;
         self.clear_work().await;
         result?;
 

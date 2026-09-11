@@ -3,11 +3,11 @@ use bb8::Pool;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sidekiq::{
-    periodic, ChainIter, Job, Processor, RedisConnectionManager, RedisPool, Result,
-    ServerMiddleware, Worker, WorkerRef,
+    ChainIter, Job, Processor, RedisConnectionManager, RedisPool, Result, ServerMiddleware, Worker,
+    WorkerRef, periodic,
 };
 use std::sync::Arc;
-use tracing::{debug, error, info, Level};
+use tracing::{Level, debug, error, info};
 
 #[derive(Clone)]
 struct HelloWorker;
@@ -95,15 +95,15 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
             serde_json::from_value(job.args.clone());
 
         // If we can safely deserialize then attempt to filter based on user guid.
-        if let Ok((filter,)) = args {
-            if filter.is_expired() {
-                error!({
+        if let Ok((filter,)) = args
+            && filter.is_expired()
+        {
+            error!({
                     "class" = &job.class,
                     "jid" = &job.jid,
                     "user_guid" = filter.user_guid
                 }, "Detected an expired user, skipping this job");
-                return Ok(());
-            }
+            return Ok(());
         }
 
         chain.next(job, worker, redis).await

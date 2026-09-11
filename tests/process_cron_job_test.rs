@@ -3,8 +3,8 @@ mod test {
     use async_trait::async_trait;
     use bb8::Pool;
     use sidekiq::{
-        periodic, Processor, RedisConnectionManager, RedisPool, Result, Scheduled, WorkFetcher,
-        Worker,
+        Processor, RedisConnectionManager, RedisPool, Result, Scheduled, WorkFetcher, Worker,
+        periodic,
     };
     use std::sync::{Arc, Mutex};
 

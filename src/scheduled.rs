@@ -1,4 +1,4 @@
-use crate::{periodic::PeriodicJob, RedisPool, UnitOfWork};
+use crate::{RedisPool, UnitOfWork, periodic::PeriodicJob};
 use tracing::debug;
 
 pub struct Scheduled {

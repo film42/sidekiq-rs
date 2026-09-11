@@ -1,8 +1,8 @@
 use crate::RedisPool;
 use rand::RngCore;
 use serde::Serialize;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone)]
 pub struct Counter {
@@ -244,8 +244,8 @@ fn get_rss_kb() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bb8::Pool;
     use crate::RedisConnectionManager;
+    use bb8::Pool;
 
     async fn test_pool() -> crate::RedisPool {
         let manager = RedisConnectionManager::new("redis://127.0.0.1/").unwrap();
@@ -306,7 +306,10 @@ mod tests {
         let p = new_publisher();
 
         p.publish_stats(redis.clone()).await.unwrap();
-        assert!(exists(&redis, p.identity()).await, "heartbeat hash should exist");
+        assert!(
+            exists(&redis, p.identity()).await,
+            "heartbeat hash should exist"
+        );
 
         p.deregister(redis.clone()).await.unwrap();
         assert!(

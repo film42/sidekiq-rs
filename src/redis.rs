@@ -1,9 +1,9 @@
 use bb8::{CustomizeConnection, ManageConnection, Pool};
-use redis::aio::MultiplexedConnection as Connection;
 use redis::AsyncCommands;
 pub use redis::RedisError;
 use redis::ToRedisArgs;
 pub use redis::Value as RedisValue;
+use redis::aio::MultiplexedConnection as Connection;
 use redis::{Client, IntoConnectionInfo};
 use std::future::Future;
 use std::ops::DerefMut;

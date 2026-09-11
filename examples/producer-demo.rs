@@ -72,17 +72,17 @@ impl ServerMiddleware for FilterExpiredUsersMiddleware {
             serde_json::from_value(job.args.clone());
 
         // If we can safely deserialize then attempt to filter based on user guid.
-        if let Ok((filter,)) = args {
-            if filter.is_expired() {
-                error!({
-                        "class" = &job.class,
-                        "jid" = &job.jid,
-                        "user_guid" = filter.user_guid
-                    },
-                    "Detected an expired user, skipping this job"
-                );
-                return Ok(());
-            }
+        if let Ok((filter,)) = args
+            && filter.is_expired()
+        {
+            error!({
+                    "class" = &job.class,
+                    "jid" = &job.jid,
+                    "user_guid" = filter.user_guid
+                },
+                "Detected an expired user, skipping this job"
+            );
+            return Ok(());
         }
 
         chain.next(job, worker, redis).await

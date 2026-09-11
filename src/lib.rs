@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use middleware::Chain;
 use rand::{Rng, RngCore};
 use serde::{
-    de::{self, Deserializer, Visitor},
     Deserialize, Serialize, Serializer,
+    de::{self, Deserializer, Visitor},
 };
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
@@ -22,7 +22,7 @@ mod stats;
 
 // Re-export
 pub use crate::redis::{
-    with_custom_namespace, RedisConnection, RedisConnectionManager, RedisError, RedisPool,
+    RedisConnection, RedisConnectionManager, RedisError, RedisPool, with_custom_namespace,
 };
 pub use ::redis as redis_rs;
 pub use middleware::{ChainIter, ServerMiddleware};
