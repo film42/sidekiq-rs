@@ -6,10 +6,52 @@ use crate::{
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::select;
+use tokio::sync::Notify;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
+
+/// Tracks in-flight worker tasks and wakes the stats loop when the last one exits.
+///
+/// Used so the stats heartbeat can keep publishing `quiet: true` until drain
+/// finishes — matching Ruby Sidekiq, which only calls `clear_heartbeat` after
+/// `Manager#stop` returns.
+struct LiveWorkers {
+    count: AtomicUsize,
+    drained: Notify,
+}
+
+impl LiveWorkers {
+    fn new(count: usize) -> Arc<Self> {
+        let workers = Arc::new(Self {
+            count: AtomicUsize::new(count),
+            drained: Notify::new(),
+        });
+        // No workers will ever Drop a guard, so mark drained now. The stats loop
+        // only awaits this after quiet, so heartbeats continue until shutdown.
+        if count == 0 {
+            workers.drained.notify_one();
+        }
+        workers
+    }
+}
+
+/// Decrements the live-worker count when a worker task exits (including panic).
+/// Notifies waiters when the count reaches zero (`notify_one` stores a permit if
+/// nobody is waiting yet, so a drain that finishes before the stats loop awaits
+/// is still observed).
+struct LiveWorkerGuard(Arc<LiveWorkers>);
+
+impl Drop for LiveWorkerGuard {
+    fn drop(&mut self) {
+        if self.0.count.fetch_sub(1, Ordering::Relaxed) == 1 {
+            // Last worker has exited, notify the stats loop.
+            self.0.drained.notify_one();
+        }
+    }
+}
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum WorkFetcher {
@@ -106,6 +148,18 @@ impl ProcessorConfig {
     pub fn queue_config(mut self, queue: String, config: QueueConfig) -> Self {
         self.queue_configs.insert(queue, config);
         self
+    }
+
+    /// Shared workers plus all dedicated queue workers — the concurrency
+    /// reported in the Sidekiq-web process heartbeat.
+    #[must_use]
+    pub fn total_concurrency(&self) -> usize {
+        self.num_workers
+            + self
+                .queue_configs
+                .values()
+                .map(|c| c.num_workers)
+                .sum::<usize>()
     }
 }
 
@@ -338,21 +392,28 @@ impl Processor {
         } else {
             "UNKNOWN_HOSTNAME".to_string()
         };
+        let total_concurrency = self.config.total_concurrency();
         let stats_publisher = StatsPublisher::new(
             hostname,
             self.human_readable_queues.clone(),
             self.busy_jobs.clone(),
-            self.config.num_workers,
+            total_concurrency,
         );
         let identity = stats_publisher.identity().to_string();
+
+        // Pre-count workers so the stats drain loop does not deregister before
+        // spawned tasks have a chance to start (and later Drop).
+        let live_workers = LiveWorkers::new(total_concurrency);
 
         // Logic for spawning shared workers (workers that handles multiple queues) and dedicated
         // workers (workers that handle a single queue).
         let spawn_worker = |mut processor: Processor,
                             cancellation_token: CancellationToken,
+                            live_workers: Arc<LiveWorkers>,
                             num: usize,
                             dedicated_queue_name: Option<String>| {
             async move {
+                let _guard = LiveWorkerGuard(live_workers);
                 loop {
                     if let Err(err) = processor.process_one().await {
                         error!("Error leaked out the bottom: {:?}", err);
@@ -378,6 +439,7 @@ impl Processor {
             join_set.spawn(spawn_worker(
                 processor,
                 self.cancellation_token.clone(),
+                live_workers.clone(),
                 i,
                 None,
             ));
@@ -397,6 +459,7 @@ impl Processor {
                     spawn_worker(
                         processor,
                         self.cancellation_token.clone(),
+                        live_workers.clone(),
                         i,
                         Some(queue.clone()),
                     )
@@ -406,15 +469,30 @@ impl Processor {
 
         // Start sidekiq-web metrics publisher. Consumes the `stats_publisher` built
         // above (whose identity the workers share for the WorkSet).
+        //
+        // Matches Ruby Sidekiq `Launcher#stop`: keep heartbeating with
+        // `quiet: true` while workers drain in-flight jobs, and only call
+        // `clear_heartbeat` / deregister after workers have exited.
         join_set.spawn({
             let redis = self.redis.clone();
             let cancellation_token = self.cancellation_token.clone();
+            let live_workers = live_workers.clone();
             async move {
                 loop {
                     // TODO: Use process count to meet a 5 second avg.
                     select! {
+                        biased;
                         _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
-                        _ = cancellation_token.cancelled() => {
+                        _ = cancellation_token.cancelled(), if !stats_publisher.is_quiet() => {
+                            // After setting quiet, drop the cancel arm so we don't busy-loop on an
+                            // already-fired token; keep heartbeating until workers drain.
+                            stats_publisher.set_quiet();
+                        }
+                        // After quiet, break as soon as the last worker exits (or immediately
+                        // when there were never any workers — see LiveWorkers::new(0)).
+                        // Gated on quiet so a pre-stored drained permit is not consumed at startup.
+                        _ = live_workers.drained.notified(), if stats_publisher.is_quiet() => {
+                            tracing::info!("Last worker exited, terminating stats publisher");
                             break;
                         }
                     }
@@ -424,8 +502,8 @@ impl Processor {
                     }
                 }
 
-                // On graceful shutdown, remove the process from the `processes` set and
-                // delete the heartbeat hash. This mirrors Ruby Sidekiq's clear_heartbeat():
+                // After drain completes, remove the process from Redis. Mirrors
+                // Ruby Sidekiq's clear_heartbeat():
                 //   pipeline.srem("processes", [identity])
                 //   pipeline.unlink("#{identity}:work")
                 // Without this, stale entries accumulate in the `processes` set until the

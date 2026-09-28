@@ -2,7 +2,7 @@ use crate::RedisPool;
 use rand::RngCore;
 use serde::Serialize;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Clone)]
 pub struct Counter {
@@ -62,6 +62,10 @@ pub struct StatsPublisher {
     started_at: chrono::DateTime<chrono::Utc>,
     busy_jobs: Counter,
     concurrency: usize,
+    /// Mirrors Ruby Sidekiq's `@done` / `quiet` heartbeat field. Set when
+    /// graceful shutdown begins so the web UI shows the process as quiet
+    /// while in-flight jobs drain.
+    quiet: AtomicBool,
 }
 
 fn generate_identity(hostname: &String) -> String {
@@ -101,7 +105,21 @@ impl StatsPublisher {
             started_at,
             busy_jobs,
             concurrency,
+            quiet: AtomicBool::new(false),
         }
+    }
+
+    /// Mark this process quiet (stopping). Matches Ruby `Launcher#quiet` /
+    /// `@done = true`, which heartbeats publish as `quiet: "true"` while
+    /// draining — the process stays visible on the Busy page until
+    /// [`Self::deregister`] runs after workers finish.
+    pub fn set_quiet(&self) {
+        self.quiet.store(true, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn is_quiet(&self) -> bool {
+        self.quiet.load(Ordering::Relaxed)
     }
 
     // 127.0.0.1:6379> hkeys "yolo_app:DESKTOP-UMSV21A:107068:5075431aeb06"
@@ -183,7 +201,11 @@ impl StatsPublisher {
         Ok(ProcessStats {
             rtt_us: "0".into(),
             busy: self.busy_jobs.value(),
-            quiet: "false".into(),
+            quiet: if self.is_quiet() {
+                "true".into()
+            } else {
+                "false".into()
+            },
             rss: rss_in_kb,
             concurrency: self.concurrency,
             beat: chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
@@ -345,6 +367,40 @@ mod tests {
         p.publish_stats(redis.clone()).await.unwrap();
         p.deregister(redis.clone()).await.unwrap();
         // Second call must not error (SREM on missing member is a no-op in Redis)
+        p.deregister(redis.clone()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_quiet_is_reflected_in_published_heartbeat() {
+        let redis = test_pool().await;
+        let p = new_publisher();
+
+        p.publish_stats(redis.clone()).await.unwrap();
+        let quiet_before: String = {
+            let mut conn = redis.get().await.unwrap();
+            redis::cmd("HGET")
+                .arg(p.identity())
+                .arg("quiet")
+                .query_async(conn.unnamespaced_borrow_mut())
+                .await
+                .unwrap()
+        };
+        assert_eq!(quiet_before, "false");
+
+        p.set_quiet();
+        p.publish_stats(redis.clone()).await.unwrap();
+        let quiet_after: String = {
+            let mut conn = redis.get().await.unwrap();
+            redis::cmd("HGET")
+                .arg(p.identity())
+                .arg("quiet")
+                .query_async(conn.unnamespaced_borrow_mut())
+                .await
+                .unwrap()
+        };
+        assert_eq!(quiet_after, "true");
+        assert!(p.is_quiet());
+
         p.deregister(redis.clone()).await.unwrap();
     }
 }
